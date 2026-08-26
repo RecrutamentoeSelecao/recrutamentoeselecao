@@ -400,6 +400,50 @@ select.stt{border-left:3px solid transparent}
 .stt.s-teal{background:var(--teal-bg); color:var(--teal)}
 .stt.s-rosa{background:var(--rosa-bg); color:var(--rosa)}
 /* seletor de cor na Base: mostra a própria cor e abre a paleta ao clicar */
+/* ---- calendário ---- */
+.calresumo{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 16px}
+.calfiltros{flex-wrap:wrap}
+.calfiltros .chip-btn b{font-weight:600; opacity:.65; margin-left:3px}
+.calgrupo{margin:0 0 22px}
+.calh{display:flex; align-items:baseline; gap:8px; font-size:13px; font-weight:600; letter-spacing:.04em;
+  text-transform:uppercase; margin:0 0 8px; padding-bottom:5px; border-bottom:2px solid var(--rule)}
+.calh.atrasado{color:var(--crit); border-bottom-color:var(--crit)}
+.calh.hoje,.calh.amanha{color:var(--warn); border-bottom-color:var(--warn)}
+.callista{display:flex; flex-direction:column; gap:1px}
+.calrow{display:grid; grid-template-columns:88px 130px 1fr auto auto; gap:0 14px; align-items:center;
+  width:100%; text-align:left; background:var(--surface); border:1px solid var(--rule);
+  padding:9px 14px; font:inherit; font-size:13px; color:var(--ink); cursor:pointer}
+.calrow:hover{background:var(--surface-2)}
+.calrow:focus-visible{outline:2px solid var(--brand); outline-offset:-2px}
+.caldata{font-variant-numeric:tabular-nums; color:var(--ink-soft)}
+.caltipo{font-size:11px; font-weight:600; letter-spacing:.03em; padding:2px 7px; white-space:nowrap;
+  border:1px solid currentColor; justify-self:start}
+.caltit{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.calquem{color:var(--ink-soft)}
+.calmarca{font-size:11.5px; color:var(--ink-faint); white-space:nowrap}
+.t-vaga{color:var(--azul)} .t-experiencia{color:var(--roxo)} .t-contrato{color:var(--teal)}
+.t-integracao{color:var(--ser)} .t-uniforme{color:var(--rosa)} .t-nota{color:var(--ink-faint)}
+.calnav{display:flex; gap:10px; align-items:center; margin:0 0 12px; flex-wrap:wrap}
+.calnav b{font-size:15px}
+.calgrade{display:grid; grid-template-columns:repeat(7,1fr); gap:1px; background:var(--rule);
+  border:1px solid var(--rule)}
+.calcab{background:var(--surface-2); padding:6px 8px; font-size:11px; font-weight:600;
+  letter-spacing:.06em; text-transform:uppercase; color:var(--ink-faint); text-align:center}
+.calcel{background:var(--surface); min-height:96px; padding:5px 6px 7px; display:flex;
+  flex-direction:column; gap:3px}
+.calcel.fora{background:var(--surface-2); opacity:.55}
+.calcel.hoje{outline:2px solid var(--brand); outline-offset:-2px}
+.calcel.temAtraso{background:var(--crit-bg)}
+.caldia{font-size:11.5px; font-weight:600; color:var(--ink-soft); font-variant-numeric:tabular-nums}
+.calchip{display:block; width:100%; text-align:left; font:inherit; font-size:11px; line-height:1.3;
+  padding:2px 5px; border:1px solid currentColor; background:var(--surface-2); cursor:pointer;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.calchip.atras{background:var(--crit-bg); color:var(--crit)}
+.calmais{font-size:10.5px; color:var(--ink-faint)}
+@media (max-width:900px){
+  .calrow{grid-template-columns:74px 1fr auto; gap:4px 10px}
+  .caltipo,.calmarca{display:none}
+}
 select.swsel{width:104px; min-width:104px; height:24px; padding:0 6px; border:1px solid var(--rule-strong);
   cursor:pointer; font-size:11.5px; font-weight:500}
 select.swsel option{background:var(--surface); color:var(--ink)}
@@ -664,6 +708,7 @@ table.grid.cabe .rowbtn{padding:2px 5px; font-size:11px}
 </div>
 <main>
   <section class="panel" id="p-painel" role="tabpanel"></section>
+  <section class="panel" id="p-calendario" role="tabpanel" hidden></section>
   <section class="panel" id="p-vagas" role="tabpanel" hidden></section>
   <section class="panel" id="p-candidatos" role="tabpanel" hidden></section>
   <section class="panel" id="p-experiencia" role="tabpanel" hidden></section>
@@ -680,7 +725,7 @@ table.grid.cabe .rowbtn{padding:2px 5px; font-size:11px}
 <div class="cadeado" id="cadeado" hidden></div>
 <div class="modal" id="modal" hidden></div>
 
-<script type="application/json" id="semente">{"versao":2,"reset":"2026-08-22-limpeza-2","params":{"etapas":[{"n":1,"nome":"Alinhamento com o gestor","sla":1},{"n":2,"nome":"Divulgação publicada","sla":2},{"n":3,"nome":"Triagem concluída","sla":5},{"n":4,"nome":"Envio de parecer / shortlist","sla":10},{"n":5,"nome":"Entrevista com o gestor","sla":15},{"n":6,"nome":"Aprovação do gestor","sla":18},{"n":7,"nome":"Proposta enviada","sla":20},{"n":8,"nome":"Proposta aceita","sla":23},{"n":9,"nome":"Exame admissional","sla":27},{"n":10,"nome":"Admissão concluída","sla":30}],"agingVerde":0.7,"agingAmarelo":1.0,"expP1":45,"expP2":90,"metaSla":0.9,"metaCandVaga":8,"metaComparecimento":0.7,"slaCiee":2,"empresaIntegracao":"FAGRON SERVICES","autoSalvar":true,"autoBuscar":true,"cores":{"statusVaga":{},"statusCand":{}},"sinc":{"repo":"RecrutamentoeSelecao/rs-fagron-dados","arquivo":"dados.json","branch":"main"},"empresasUniforme":["FAGRON SERVICES","FAGRON DISTRIBUTION"]},"listas":{"empresas":[],"cargos":[],"departamentos":[],"statusVaga":[],"tipoVaga":[],"prioridade":[],"statusCand":[],"fontes":[],"motivos":[],"checklist":[],"tamanhos":[],"terceiros":[],"instituicoes":[],"feriados":[]},"vagas":[],"candidatos":[],"experiencia":[],"admissao":[],"integracao":[],"contratos":[],"uniformes":[],"notas":[],"trancado":true}</script>
+<script type="application/json" id="semente">{"versao":2,"reset":"2026-08-22-limpeza-2","params":{"etapas":[{"n":1,"nome":"Alinhamento com o gestor","sla":1},{"n":2,"nome":"Divulgação publicada","sla":2},{"n":3,"nome":"Triagem concluída","sla":5},{"n":4,"nome":"Envio de parecer / shortlist","sla":10},{"n":5,"nome":"Entrevista com o gestor","sla":15},{"n":6,"nome":"Aprovação do gestor","sla":18},{"n":7,"nome":"Proposta enviada","sla":20},{"n":8,"nome":"Proposta aceita","sla":23},{"n":9,"nome":"Exame admissional","sla":27},{"n":10,"nome":"Admissão concluída","sla":30}],"agingVerde":0.7,"agingAmarelo":1.0,"expP1":45,"expP2":90,"metaSla":0.9,"metaCandVaga":8,"metaComparecimento":0.7,"slaCiee":2,"empresaIntegracao":"FAGRON SERVICES","autoSalvar":true,"autoBuscar":true,"cores":{"statusVaga":{},"statusCand":{}},"sinc":{"repo":"RecrutamentoeSelecao/rs-fagron-dados","arquivo":"dados.json","branch":"main"},"empresasUniforme":["FAGRON SERVICES","FAGRON DISTRIBUTION"]},"listas":{"empresas":[],"cargos":[],"departamentos":[],"gestores":[],"statusVaga":[],"tipoVaga":[],"prioridade":[],"statusCand":[],"fontes":[],"motivos":[],"checklist":[],"tamanhos":[],"terceiros":[],"instituicoes":[],"feriados":[]},"vagas":[],"candidatos":[],"experiencia":[],"admissao":[],"integracao":[],"contratos":[],"uniformes":[],"notas":[],"trancado":true}</script>
 
 <script>
 "use strict";
@@ -691,7 +736,7 @@ let S = null;              // estado de dados
 let sujo = false;          // há alterações não salvas
 let podeSalvar = false;    // capacidade de publicar disponível
 let salvando = false;
-const ui = { tab:'painel', vFiltro:'abertas', vBusca:'', cFiltro:'todos', cBusca:'',
+const ui = { tab:'painel', calVista:'lista', calFora:[], calMes:null, vFiltro:'abertas', vBusca:'', cFiltro:'todos', cBusca:'',
              eFiltro:'pendentes', eBusca:'', aFiltro:'pendentes', aBusca:'',
              iFiltro:'pendentes', iBusca:'', kFiltro:'abertos', kBusca:'', uBusca:'',
              eDe:'', eAte:'', iDe:'', iAte:'', kDe:'', kAte:'', uDe:'', uAte:'',
@@ -1170,7 +1215,7 @@ function renderVagas(){
     const fl = {saudavel:'🟢 Saudável', atencao:'🟡 Atenção', critico:'🔴 Crítico', concluida:'⚪ Concluída'}[c.farol] || '—';
     h += `<tr${autoriaAttr(v)}><td ${fx('id','idcell')}>${v.id}</td>
       <td ${fx('status')}>${cStt(i,'status',v.status,L.statusVaga,'statusVaga')}</td>
-      <td ${fx('empresa')}>${cLista(i,'empresa',v.empresa,'empresas')}</td>
+      <td ${fx('empresa')}>${cBase(i,'empresa',v.empresa,'empresas')}</td>
       <td ${fx('cargo')}>${cBase(i,'cargo',v.cargo,'cargos')}</td>
       <td ${fx('substituido')}>${cWrap(i,'substituido',v.substituido)}</td>
       <td ${fx('aprovado','fxfim')}>${cWrap(i,'aprovado',v.aprovado)}</td>
@@ -1187,9 +1232,9 @@ function renderVagas(){
     }
     h += `<td>${cDate(i,'inicio',v.inicio)}</td>
       <td class="calc n">${c.ttf==null?'':c.ttf}</td>
-      <td>${cSel(i,'tipo',v.tipo,L.tipoVaga)}</td>
-      <td>${cLista(i,'depto',v.depto,'departamentos')}</td>
-      <td>${cTxt(i,'gestor',v.gestor)}</td>
+      <td>${cBase(i,'tipo',v.tipo,'tipoVaga')}</td>
+      <td>${cBase(i,'depto',v.depto,'departamentos')}</td>
+      <td>${cBase(i,'gestor',v.gestor,'gestores')}</td>
       <td>${cNum(i,'salario',v.salario)}</td>
       <td>${cWrap(i,'obs',v.obs)}</td>
       <td class="calc" style="text-align:center"><input type="checkbox" data-i="${i}" data-sla="1"${v.medirSla?' checked':''}></td>
@@ -1328,14 +1373,14 @@ function renderCandidatos(){
     h += `<tr${autoriaAttr(c)}><td class="idcell sticky1">${c.id}</td>
       <td>${cWrap(i,'nome',c.nome)}</td>
       <td>${cLista(i,'idVaga',c.idVaga,'vagas-abertas')}</td>
-      <td>${cLista(i,'empresa',c.empresa,'empresas')}</td>
+      <td>${cBase(i,'empresa',c.empresa,'empresas')}</td>
       <td>${cBase(i,'cargo',c.cargo,'cargos')}</td>
       <td>${cTxt(i,'telefone',c.telefone)}</td>
       <td>${cTxt(i,'email',c.email)}</td>
-      <td>${cLista(i,'fonte',c.fonte,'fontes')}</td>
+      <td>${cBase(i,'fonte',c.fonte,'fontes')}</td>
       <td>${cDate(i,'dtCand',c.dtCand)}</td>
       <td>${cStt(i,'status',c.status,L.statusCand,'statusCand')}</td>
-      <td>${cSel(i,'motivo',c.motivo,L.motivos)}</td>
+      <td>${cBase(i,'motivo',c.motivo,'motivos')}</td>
       <td>${cDate(i,'dtTriagem',c.dtTriagem)}</td>
       <td>${cDate(i,'dtRH',c.dtRH)}</td>
       <td>${cSel(i,'compRH',c.compRH,['SIM','NÃO'])}</td>
@@ -1420,8 +1465,8 @@ function renderExperiencia(){
     ? `<span class="prazo p-${m.k}"><b>${fmtD(data)}</b><i>${m.t}</i></span>`
     : '<i class="vaz">—</i>';
   linhasOrd.forEach(({e,i,c}) => {
-    h += `<tr${autoriaAttr(e)}><td ${fx('empresa')}>${cLista(i,'empresa',e.empresa,'empresas')}</td>
-      <td ${fx('gestor')}>${cTxt(i,'gestor',e.gestor)}</td>
+    h += `<tr${autoriaAttr(e)}><td ${fx('empresa')}>${cBase(i,'empresa',e.empresa,'empresas')}</td>
+      <td ${fx('gestor')}>${cBase(i,'gestor',e.gestor,'gestores')}</td>
       <td ${fx('cargo')}>${cBase(i,'cargo',e.cargo,'cargos')}</td>
       <td ${fx('nome')}>${cWrap(i,'nome',e.nome)}</td>
       <td ${fx('admissao','fxfim')}${e.idVaga ? ' data-vinc="1" title="Vem da aba Vagas — corrija lá e muda em todo lugar"' : ''}>${cDate(i,'admissao',e.admissao)}</td>
@@ -1657,7 +1702,8 @@ function corStatus(lk, v){
 }
 /* Célula editável que carrega a própria cor do status. */
 const cStt = (i,f,v,lista,lk) =>
-  `<select class="cell stt ${corStatus(lk, v)}" data-i="${i}" data-f="${f}">${opts(lista, v)}</select>`;
+  `<select class="cell stt ${corStatus(lk, v)}" data-i="${i}" data-f="${f}" data-base="${lk}">${
+    opts(lista, v)}<option value="__novo__">＋ cadastrar novo…</option></select>`;
 
 /* ============================================================ MÓDULOS */
 function vagaPorId(id){ return S.vagas.find(v => v.id === id) || null; }
@@ -1842,10 +1888,10 @@ function renderIntegracao(){
   if (!linhasOrd.length) h += `<tr><td colspan="11"><div class="empty">Nenhum registro com esses filtros.</div></td></tr>`;
   linhasOrd.forEach(({g,i,c}) => {
     h += `<tr${autoriaAttr(g)}><td ${fx('admissao')}${g.idVaga ? ' data-vinc="1" title="Vem da aba Vagas — corrija lá e muda em todo lugar"' : ''}>${cDate(i,'admissao',g.admissao)}</td>
-      <td ${fx('empresa')}>${cLista(i,'empresa',g.empresa,'empresas')}</td>
+      <td ${fx('empresa')}>${cBase(i,'empresa',g.empresa,'empresas')}</td>
       <td ${fx('nome','fxfim')}>${cWrap(i,'nome',g.nome)}</td>
-      <td>${cLista(i,'setor',g.setor,'departamentos')}</td>
-      <td>${cTxt(i,'gestor',g.gestor)}</td>
+      <td>${cBase(i,'setor',g.setor,'departamentos')}</td>
+      <td>${cBase(i,'gestor',g.gestor,'gestores')}</td>
       <td>${cSel(i,'feito',g.feito,['SIM','NÃO','N/A'])}</td>
       <td>${cDate(i,'dataIntegr',g.dataIntegr)}</td>
       <td class="calc n">${c.dias==null?'':c.dias}</td>
@@ -1972,7 +2018,7 @@ function renderContratos(){
 
   if (!linhasOrd.length) h += `<tr><td colspan="13"><div class="empty">Nenhum contrato com esses filtros.</div></td></tr>`;
   linhasOrd.forEach(({k,i,c}) => {
-    h += `<tr${autoriaAttr(k)}><td ${fx('empresa')}>${cLista(i,'empresa',k.empresa,'empresas')}</td>
+    h += `<tr${autoriaAttr(k)}><td ${fx('empresa')}>${cBase(i,'empresa',k.empresa,'empresas')}</td>
       <td ${fx('nome')}>${cWrap(i,'nome',k.nome)}</td>
       <td ${fx('faculdade','fxfim')}>${cBase(i,'faculdade',k.faculdade,'instituicoes')}</td>
       <td>${cDate(i,'solic',k.solic)}</td>
@@ -2113,16 +2159,16 @@ function renderUniformes(){
 
   if (!linhasOrd.length) h += `<tr><td colspan="15"><div class="empty">Nenhum registro com esses filtros.</div></td></tr>`;
   linhasOrd.forEach(({u,i}) => {
-    h += `<tr${autoriaAttr(u)}><td>${cWrap(i,'empresa',u.empresa,'empresas')}</td>
+    h += `<tr${autoriaAttr(u)}><td>${cBase(i,'empresa',u.empresa,'empresas')}</td>
       <td>${cWrap(i,'nome',u.nome)}</td>
       <td>${cSel(i,'vaga',u.vaga,['Nova posição','Reposição'])}</td>
       <td${u.idVaga ? ' data-vinc="1" title="Vem da aba Vagas — corrija lá e muda em todo lugar"' : ''}>${cDate(i,'admissao',u.admissao)}</td>
       <td>${cBase(i,'cargo',u.cargo,'cargos')}</td>
-      <td>${cWrap(i,'setor',u.setor,'departamentos')}</td>
+      <td>${cBase(i,'setor',u.setor,'departamentos')}</td>
       <td>${cDate(i,'nascimento',u.nascimento)}</td>
       <td>${cWrap(i,'telefone',u.telefone)}</td>
       <td>${cWrap(i,'cpf',u.cpf)}</td>
-      <td>${cSel(i,'terceiro',u.terceiro,L.terceiros||[])}</td>
+      <td>${cBase(i,'terceiro',u.terceiro,'terceiros')}</td>
       <td>${cTxt(i,'sapato',u.sapato)}</td>
       <td>${cSel(i,'camisa',u.camisa,TAM,'—',true)}</td>
       <td>${cSel(i,'calca',u.calca,TAM,'—',true)}</td>
@@ -2359,6 +2405,7 @@ function confirmarCadastro(){
 const LISTAS_META = [
   {k:'empresas',      t:'Empresas',            usos:[['vagas','empresa'],['candidatos','empresa'],['experiencia','empresa'],['integracao','empresa'],['contratos','empresa'],['uniformes','empresa']]},
   {k:'cargos',        t:'Cargos',              usos:[['vagas','cargo'],['candidatos','cargo'],['experiencia','cargo'],['uniformes','cargo']]},
+  {k:'gestores',      t:'Gestores',             usos:[['vagas','gestor'],['experiencia','gestor'],['integracao','gestor']]},
   {k:'departamentos', t:'Departamentos',       usos:[['vagas','depto'],['experiencia','depto'],['integracao','setor'],['uniformes','setor']]},
   {k:'statusVaga',    t:'Status da vaga',      usos:[['vagas','status']]},
   {k:'tipoVaga',      t:'Tipo de vaga',        usos:[['vagas','tipo']]},
@@ -2432,13 +2479,224 @@ function renderBase(){
 }
 
 /* ============================================================ ABAS */
+/* ============================================================ CALENDÁRIO
+   As outras abas registram o que já foi feito e medem o prazo depois. Esta
+   olha para a frente: pega o que ainda está pendente e diz em que dia aquilo
+   deveria estar pronto.
+
+   Duas contagens convivem de propósito:
+   — prazos de processo (etapas da vaga, contrato CIEE) contam DIAS ÚTEIS, para
+     o sistema não cobrar nada num domingo;
+   — prazos legais (45 e 90 dias de experiência) contam DIAS CORRIDOS, porque
+     é assim que a lei conta.
+   O indicador de SLA do Painel continua como sempre foi, em dias corridos:
+   mexer nele mudaria o histórico já medido. */
+
+const CAL_TIPOS = [
+  ['vaga',        'Etapas de vaga'],
+  ['experiencia', 'Experiência'],
+  ['contrato',    'Contratos CIEE'],
+  ['integracao',  'Integração'],
+  ['uniforme',    'Uniformes'],
+  ['nota',        'Anotações'],
+];
+
+function fimDaSemana(){
+  const d = new Date(HOJE);
+  d.setDate(d.getDate() + (7 - (d.getDay() || 7)));   /* domingo desta semana */
+  return iso(d);
+}
+function baldeDe(data){
+  const hoje = iso(HOJE);
+  if (data < hoje) return 'atrasado';
+  if (data === hoje) return 'hoje';
+  if (data === addD(hoje, 1)) return 'amanha';
+  if (data <= fimDaSemana()) return 'semana';
+  if (data <= addD(hoje, 15)) return 'quinze';
+  return 'depois';
+}
+const CAL_BALDES = [
+  ['atrasado', 'Atrasado',            'crit'],
+  ['hoje',     'Hoje',                'warn'],
+  ['amanha',   'Amanhã',              'warn'],
+  ['semana',   'Ainda esta semana',   'neut'],
+  ['quinze',   'Próximos 15 dias',    'neut'],
+  ['depois',   'Mais para a frente',  'neut'],
+];
+
+/* Tudo que está pendente, com a data em que deveria acontecer. */
+function compromissos(){
+  const P = S.params, hoje = iso(HOJE), fora = [];
+  const pôr = o => {
+    if (!o.data) return;
+    o.bucket = baldeDe(o.data);
+    o.faltam = o.corridos ? difD(hoje, o.data) : diasUteisEntre(hoje, o.data);
+    fora.push(o);
+  };
+
+  /* vagas em aberto: a PRÓXIMA etapa não cumprida. Mostrar as dez de cada vaga
+     encheria a tela de coisa que ainda não é da vez. */
+  (S.vagas || []).forEach(v => {
+    if (!ABERTO(v.status) || !v.abertura) return;
+    let k = -1;
+    for (let i = 0; i < P.etapas.length; i++) if (!v.etapas[i]){ k = i; break; }
+    if (k < 0) return;
+    pôr({ tipo:'vaga', data: somarDiasUteis(v.abertura, P.etapas[k].sla), aba:'vagas',
+          titulo: P.etapas[k].nome,
+          quem: [v.cargo, v.empresa].filter(Boolean).join(' · ') || v.id,
+          marca: v.id, nota: 'etapa ' + (k+1) + ' de ' + P.etapas.length });
+  });
+
+  /* período de experiência: prazo legal, em dias corridos */
+  (S.experiencia || []).forEach(e => {
+    if (!e.admissao) return;
+    const c = calcExp(e);
+    if (!e.prorrog) pôr({ tipo:'experiencia', data:c.lim1, aba:'experiencia', corridos:true,
+      titulo:'Decidir prorrogação — ' + P.expP1 + ' dias', quem:e.nome || '(sem nome)',
+      marca:e.empresa || '', nota:'dias corridos' });
+    if (!e.efetiv && !c.semSegundo) pôr({ tipo:'experiencia', data:c.lim2, aba:'experiencia', corridos:true,
+      titulo:'Decidir efetivação — ' + P.expP2 + ' dias', quem:e.nome || '(sem nome)',
+      marca:e.empresa || '', nota:'dias corridos' });
+  });
+
+  /* contrato de estágio: devolução dentro do SLA do CIEE */
+  (S.contratos || []).forEach(k => {
+    if (!k.solic || k.retorno) return;
+    pôr({ tipo:'contrato', data: calcContrato(k).limite, aba:'contratos',
+      titulo:'Retorno do contrato assinado', quem:k.nome || '(sem nome)',
+      marca:k.faculdade || '', nota:'CIEE' });
+  });
+
+  /* integração e uniforme: têm a admissão como data-alvo */
+  (S.integracao || []).forEach(g => {
+    if (g.feito === 'SIM' || !g.admissao) return;
+    pôr({ tipo:'integracao', data:g.admissao, aba:'integracao',
+      titulo:'Integração pendente', quem:g.nome || '(sem nome)', marca:g.empresa || '' });
+  });
+  (S.uniformes || []).forEach(u => {
+    if (u.entregue === 'SIM' || !u.admissao) return;
+    pôr({ tipo:'uniforme', data:u.admissao, aba:'uniformes',
+      titulo:'Entregar uniforme até a admissão', quem:u.nome || '(sem nome)', marca:u.empresa || '' });
+  });
+
+  /* anotações rápidas com data de lembrete */
+  (S.notas || []).forEach(n => {
+    if (n.feito || !n.quando) return;
+    pôr({ tipo:'nota', data:n.quando, aba:'vagas',
+      titulo:n.texto || '(anotação sem texto)', quem:'', marca:n.idVaga || '' });
+  });
+
+  return fora.sort((a, b) => a.data < b.data ? -1 : a.data > b.data ? 1 : 0);
+}
+
+function calFiltrados(){
+  const desligados = ui.calFora || [];
+  return compromissos().filter(c => !desligados.includes(c.tipo));
+}
+const CAL_ROTULO = Object.fromEntries(CAL_TIPOS);
+function calPrazo(c){
+  const u = c.corridos ? 'd' : 'd úteis';
+  if (c.faltam < 0) return 'atrasado há ' + (-c.faltam) + u;
+  if (c.faltam === 0) return 'vence hoje';
+  return 'faltam ' + c.faltam + u;
+}
+function calLinha(c){
+  const fk = c.bucket === 'atrasado' ? 'crit' : (c.bucket === 'hoje' || c.bucket === 'amanha') ? 'warn' : 'neut';
+  return `<button class="calrow" data-calir="${esc(c.aba)}">
+    <span class="caldata">${fmtD(c.data)}</span>
+    <span class="caltipo t-${c.tipo}">${esc(CAL_ROTULO[c.tipo])}</span>
+    <span class="caltit">${esc(c.titulo)}${c.quem ? ` <span class="calquem">· ${esc(c.quem)}</span>` : ''}</span>
+    <span class="calmarca">${esc(c.marca || '')}</span>
+    <span class="pill ${fk}">${esc(calPrazo(c))}</span></button>`;
+}
+
+function calGradeMes(itens){
+  const ref = ui.calMes ? parseD(ui.calMes + '-01') : new Date(HOJE.getFullYear(), HOJE.getMonth(), 1);
+  const ano = ref.getFullYear(), mes = ref.getMonth();
+  const primeiro = new Date(ano, mes, 1), ultimo = new Date(ano, mes + 1, 0);
+  const porDia = {};
+  itens.forEach(c => { (porDia[c.data] = porDia[c.data] || []).push(c); });
+  const nomeMes = primeiro.toLocaleDateString('pt-BR', {month:'long', year:'numeric'});
+  const inicio = new Date(primeiro); inicio.setDate(1 - ((primeiro.getDay() + 6) % 7));   /* segunda */
+  let h = `<div class="calnav">
+      <button class="sm" data-calmes="-1">← mês anterior</button>
+      <b>${esc(nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1))}</b>
+      <button class="sm" data-calmes="1">próximo mês →</button>
+      <button class="sm" data-calmes="0">Voltar para hoje</button>
+    </div>
+    <div class="calgrade">
+      ${['seg','ter','qua','qui','sex','sáb','dom'].map(d => `<div class="calcab">${d}</div>`).join('')}`;
+  const cursor = new Date(inicio);
+  while (cursor <= ultimo || (cursor.getDay() + 6) % 7 !== 0){
+    const dia = iso(cursor), doMes = cursor.getMonth() === mes;
+    const doDia = porDia[dia] || [];
+    const atrasado = doDia.some(c => c.bucket === 'atrasado');
+    h += `<div class="calcel${doMes ? '' : ' fora'}${dia === iso(HOJE) ? ' hoje' : ''}${atrasado ? ' temAtraso' : ''}">
+      <div class="caldia">${cursor.getDate()}</div>
+      ${doDia.slice(0, 4).map(c => `<button class="calchip t-${c.tipo}${c.bucket==='atrasado'?' atras':''}"
+          data-calir="${esc(c.aba)}" title="${esc(c.titulo + (c.quem ? ' · ' + c.quem : '') + ' — ' + calPrazo(c))}"
+        >${esc(c.quem || c.titulo)}</button>`).join('')}
+      ${doDia.length > 4 ? `<div class="calmais">+${doDia.length - 4}</div>` : ''}</div>`;
+    cursor.setDate(cursor.getDate() + 1);
+    if (cursor.getFullYear() > ano + 1) break;
+  }
+  return h + '</div>';
+}
+
+function renderCalendario(){
+  const todos = compromissos();
+  const itens = calFiltrados();
+  const vista = ui.calVista || 'lista';
+  const conta = t => todos.filter(c => c.tipo === t).length;
+  const atrasados = itens.filter(c => c.bucket === 'atrasado').length;
+  const paraHoje = itens.filter(c => c.bucket === 'hoje').length;
+
+  let h = `<div class="toolbar">
+    <div class="chips">
+      <button class="chip-btn" data-calvista="lista" aria-pressed="${vista==='lista'}">Lista</button>
+      <button class="chip-btn" data-calvista="mes" aria-pressed="${vista==='mes'}">Mês</button>
+    </div>
+    <div class="chips calfiltros">${CAL_TIPOS.map(([k, nome]) =>
+      `<button class="chip-btn" data-caltipo="${k}" aria-pressed="${!(ui.calFora||[]).includes(k)}"
+        >${nome} <b>${conta(k)}</b></button>`).join('')}</div>
+  </div>
+  <div class="hint" style="margin-bottom:14px">Aqui está o que <b>ainda não foi feito</b>, na data em que
+    deveria estar pronto. Etapas de vaga e contrato CIEE contam <b>dias úteis</b> — fim de semana e os
+    feriados da Base ficam de fora. Os 45 e 90 dias de experiência contam <b>dias corridos</b>, porque
+    é assim que o prazo legal conta. Clique em qualquer linha para ir até o registro.</div>`;
+
+  if (!itens.length){
+    h += `<div class="empty">Nada pendente com data. Assim que houver vaga aberta com data de abertura,
+      admissão lançada ou anotação com lembrete, os prazos aparecem aqui.</div>`;
+    document.getElementById('p-calendario').innerHTML = h;
+    return;
+  }
+
+  h += `<div class="calresumo">
+    <span class="pill ${atrasados ? 'crit' : 'good'}">${atrasados} atrasado(s)</span>
+    <span class="pill ${paraHoje ? 'warn' : 'neut'}">${paraHoje} para hoje</span>
+    <span class="opc">${itens.length} compromisso(s) no total</span></div>`;
+
+  if (vista === 'mes'){
+    h += calGradeMes(itens);
+  } else {
+    CAL_BALDES.forEach(([k, nome]) => {
+      const doBalde = itens.filter(c => c.bucket === k);
+      if (!doBalde.length) return;
+      h += `<div class="calgrupo"><h3 class="calh ${k}">${nome} <span class="listcount">${doBalde.length}</span></h3>
+        <div class="callista">${doBalde.map(calLinha).join('')}</div></div>`;
+    });
+  }
+  document.getElementById('p-calendario').innerHTML = h;
+}
+
 const ABAS = [
-  {k:'painel', t:'Painel'}, {k:'vagas', t:'Vagas'},
+  {k:'painel', t:'Painel'}, {k:'calendario', t:'Calendário'}, {k:'vagas', t:'Vagas'},
   {k:'admissao', t:'Admissão'}, {k:'experiencia', t:'Experiência'}, {k:'integracao', t:'Integração'},
   {k:'contratos', t:'Contratos'}, {k:'uniformes', t:'Uniformes'}, {k:'candidatos', t:'Candidatos'},
   {k:'base', t:'Base'}, {k:'parametros', t:'Parâmetros'},
 ];
-const RENDER = {painel:renderPainel, vagas:renderVagas, candidatos:renderCandidatos,
+const RENDER = {painel:renderPainel, calendario:renderCalendario, vagas:renderVagas, candidatos:renderCandidatos,
   admissao:renderAdmissao, experiencia:renderExperiencia, integracao:renderIntegracao,
   contratos:renderContratos, uniformes:renderUniformes,
   base:renderBase, parametros:renderParametros};
@@ -2450,6 +2708,10 @@ function renderTabs(){
   const admPend = S.admissao.filter(a => calcAdm(a).pct < 1).length;
   document.getElementById('tabs').innerHTML = ABAS.map(a => {
     let b = '';
+    if (a.k==='calendario'){
+      const n = compromissos().filter(c => c.bucket === 'atrasado').length;
+      if (n) b = `<span class="badge crit">${n}</span>`;
+    }
     if (a.k==='vagas') b = `<span class="badge">${abertas}</span>`;
     if (a.k==='candidatos') b = `<span class="badge">${S.candidatos.length}</span>`;
     if (a.k==='admissao' && admPend) b = `<span class="badge">${admPend}</span>`;
@@ -2934,6 +3196,24 @@ document.addEventListener('click', async ev => {
   if (t.id==='k-add'){ novoRegistro('contratos'); return; }
   if (t.id==='u-add'){ novoRegistro('uniformes'); return; }
   if (t.id==='v-add'){ novaVaga(); return; }
+  if (t.dataset.calvista !== undefined){ ui.calVista = t.dataset.calvista; renderCalendario(); return; }
+  if (t.dataset.caltipo !== undefined){
+    const k = t.dataset.caltipo;
+    ui.calFora = ui.calFora || [];
+    ui.calFora = ui.calFora.includes(k) ? ui.calFora.filter(x => x !== k) : ui.calFora.concat(k);
+    renderCalendario(); return;
+  }
+  if (t.dataset.calmes !== undefined){
+    const d = +t.dataset.calmes;
+    if (!d) ui.calMes = null;
+    else {
+      const base = ui.calMes ? parseD(ui.calMes + '-01') : new Date(HOJE.getFullYear(), HOJE.getMonth(), 1);
+      base.setMonth(base.getMonth() + d);
+      ui.calMes = base.getFullYear() + '-' + String(base.getMonth() + 1).padStart(2, '0');
+    }
+    renderCalendario(); return;
+  }
+  if (t.dataset.calir !== undefined){ ui.tab = t.dataset.calir; render(); window.scrollTo(0,0); return; }
   if (t.id==='n-add'){ novaAnotacao(); return; }
   if (t.id==='p-zerar'){
     const q = COLECOES.reduce((n,c) => n + (S[c]||[]).length, 0);
@@ -4686,7 +4966,7 @@ const CHAVE_TOKEN = 'fagron-rs-token';
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 4;
+const VERSAO_APP = 5;
 let versaoRemota = 0;
 let desatualizado = false;
 const TEXTO_DESATUALIZADO = 'Esta página está desatualizada. Alguém está usando uma versão mais nova '
@@ -5100,7 +5380,7 @@ function normalizar(d, semente){
       r[f] = padronizar(f, r[f]);
     });
   }));
-  ['empresas','cargos','departamentos','statusVaga','tipoVaga','prioridade','statusCand',
+  ['empresas','cargos','departamentos','gestores','statusVaga','tipoVaga','prioridade','statusCand',
    'fontes','motivos','instituicoes','terceiros','tamanhos','checklist'].forEach(k => {
     if (Array.isArray(S2.listas[k])) S2.listas[k] = S2.listas[k].map(v => caixaAlta(String(v)));
   });
