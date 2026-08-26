@@ -660,7 +660,7 @@ table.grid.cabe .rowbtn{padding:2px 5px; font-size:11px}
 <div class="cadeado" id="cadeado" hidden></div>
 <div class="modal" id="modal" hidden></div>
 
-<script type="application/json" id="semente">{"versao":2,"reset":"2026-08-22-limpeza-2","params":{"etapas":[{"n":1,"nome":"Alinhamento com o gestor","sla":1},{"n":2,"nome":"Divulgação publicada","sla":2},{"n":3,"nome":"Triagem concluída","sla":5},{"n":4,"nome":"Envio de parecer / shortlist","sla":10},{"n":5,"nome":"Entrevista com o gestor","sla":15},{"n":6,"nome":"Aprovação do gestor","sla":18},{"n":7,"nome":"Proposta enviada","sla":20},{"n":8,"nome":"Proposta aceita","sla":23},{"n":9,"nome":"Exame admissional","sla":27},{"n":10,"nome":"Admissão concluída","sla":30}],"agingVerde":0.7,"agingAmarelo":1.0,"expP1":45,"expP2":90,"metaSla":0.9,"metaCandVaga":8,"metaComparecimento":0.7,"slaCiee":2,"empresaIntegracao":"FAGRON SERVICES","sinc":{"repo":"RecrutamentoeSelecao/rs-fagron-dados","arquivo":"dados.json","branch":"main"},"empresasUniforme":["FAGRON SERVICES","FAGRON DISTRIBUTION"]},"listas":{"empresas":[],"cargos":[],"departamentos":[],"statusVaga":[],"tipoVaga":[],"prioridade":[],"statusCand":[],"fontes":[],"motivos":[],"checklist":[],"tamanhos":[],"terceiros":[],"instituicoes":[],"feriados":[]},"vagas":[],"candidatos":[],"experiencia":[],"admissao":[],"integracao":[],"contratos":[],"uniformes":[],"notas":[],"trancado":true}</script>
+<script type="application/json" id="semente">{"versao":2,"reset":"2026-08-22-limpeza-2","params":{"etapas":[{"n":1,"nome":"Alinhamento com o gestor","sla":1},{"n":2,"nome":"Divulgação publicada","sla":2},{"n":3,"nome":"Triagem concluída","sla":5},{"n":4,"nome":"Envio de parecer / shortlist","sla":10},{"n":5,"nome":"Entrevista com o gestor","sla":15},{"n":6,"nome":"Aprovação do gestor","sla":18},{"n":7,"nome":"Proposta enviada","sla":20},{"n":8,"nome":"Proposta aceita","sla":23},{"n":9,"nome":"Exame admissional","sla":27},{"n":10,"nome":"Admissão concluída","sla":30}],"agingVerde":0.7,"agingAmarelo":1.0,"expP1":45,"expP2":90,"metaSla":0.9,"metaCandVaga":8,"metaComparecimento":0.7,"slaCiee":2,"empresaIntegracao":"FAGRON SERVICES","autoSalvar":true,"autoBuscar":true,"sinc":{"repo":"RecrutamentoeSelecao/rs-fagron-dados","arquivo":"dados.json","branch":"main"},"empresasUniforme":["FAGRON SERVICES","FAGRON DISTRIBUTION"]},"listas":{"empresas":[],"cargos":[],"departamentos":[],"statusVaga":[],"tipoVaga":[],"prioridade":[],"statusCand":[],"fontes":[],"motivos":[],"checklist":[],"tamanhos":[],"terceiros":[],"instituicoes":[],"feriados":[]},"vagas":[],"candidatos":[],"experiencia":[],"admissao":[],"integracao":[],"contratos":[],"uniformes":[],"notas":[],"trancado":true}</script>
 
 <script>
 "use strict";
@@ -1479,14 +1479,28 @@ function renderParametros(){
         <button class="sm" id="p-senha">${COFRE ? 'Ver pessoas' : 'Proteger com senha'}</button></div>
     </div>
 
-    <div class="pbox" style="margin-top:26px"><h3>Gravação automática</h3>
-      <div class="hint">Com isto ligado, o sistema grava sozinho depois que você para de digitar,
-        e também ao trocar de aba ou minimizar a janela. O botão <b>Salvar</b> continua funcionando
-        a qualquer momento.</div>
+    <div class="pbox" style="margin-top:26px"><h3>Piloto automático</h3>
+      <div class="hint">Com os dois ligados você não precisa clicar em nada: o sistema grava
+        sozinho quando você para de digitar e traz o que as outras fizeram enquanto você está
+        com tudo salvo. Ele nunca busca no meio da digitação, para a tela não mudar na sua mão.
+        Os botões <b>Salvar</b> e <b>Sincronizar</b> continuam valendo a qualquer momento.</div>
       <div class="prow" style="grid-template-columns:1fr auto">
         <label class="chk"><input type="checkbox" data-pauto="1"${S.params.autoSalvar !== false ? ' checked' : ''}>
           Gravar sozinho ${Math.round(AUTO_MS/1000)} segundos depois da última alteração</label>
         <span class="opc">${sincLigada() ? 'grava no repositório' : 'grava neste navegador'}</span></div>
+      <div class="prow" style="grid-template-columns:1fr auto">
+        <label class="chk"><input type="checkbox" data-pbuscar="1"${S.params.autoBuscar !== false ? ' checked' : ''}>
+          Buscar sozinho o que as outras gravaram, a cada ${Math.round(BUSCA_MS/1000)} segundos</label>
+        <span class="opc">${sincLigada() ? 'ligado ao repositório' : 'precisa da sincronização'}</span></div>
+    </div>
+
+    <div class="pbox" style="margin-top:26px"><h3>Versão do programa</h3>
+      <div class="hint">Quando alguém estiver com uma versão mais nova do sistema, esta aqui
+        <b>recusa gravar</b> em vez de apagar o que ela lançou em campos que esta versão ainda
+        não conhece. Se isso acontecer, é só apertar <b>Ctrl+Shift+R</b>.</div>
+      <div class="prow" style="grid-template-columns:1fr auto">
+        <span>Esta página é a versão <b>${VERSAO_APP}</b>${versaoRemota ? ' · o repositório está na <b>' + versaoRemota + '</b>' : ''}</span>
+        <span class="opc">${desatualizado ? 'desatualizada — atualize a página' : 'em dia'}</span></div>
     </div>
 
     ${!ehAdmin() ? '' : `<div class="pbox" style="margin-top:26px"><h3>Receber pacote de alterações</h3>
@@ -2466,9 +2480,24 @@ function redesenharTudo(){ const c = contextoUI(); render(); restaurarUI(c); }
 /* Gravação automática: um relógio que reinicia a cada alteração e dispara
    quando a pessoa para. Grava também ao esconder a aba, porque muita gente
    fecha o computador sem clicar em nada. */
-const AUTO_MS = 25000;
-let relogioAuto = null;
+const AUTO_MS = 25000;      /* parou de digitar há tanto tempo: grava */
+const BUSCA_MS = 45000;     /* de tanto em tanto tempo: procura o que as outras fizeram */
+let relogioAuto = null, relogioBusca = null;
 const autoLigado = () => S && S.params && S.params.autoSalvar !== false;
+const buscaLigada = () => S && S.params && S.params.autoBuscar !== false;
+/* O par: enquanto há coisa não gravada, quem manda é o relógio do Salvar;
+   com tudo gravado, o sistema aproveita para trazer o que as outras fizeram.
+   Nunca puxa no meio da digitação — a tela mudaria debaixo da mão da pessoa. */
+function ligarBusca(){
+  clearInterval(relogioBusca);
+  relogioBusca = setInterval(() => {
+    if (!buscaLigada() || !sincLigada() || desatualizado) return;
+    if (sujo || salvando || sincronizando || document.hidden) return;
+    if (document.getElementById('modal') && !document.getElementById('modal').hidden) return;
+    if (Date.now() - ultimoPuxao < BUSCA_MS - 2000) return;
+    puxar(true);
+  }, 15000);
+}
 function agendarAuto(){
   clearTimeout(relogioAuto);
   if (!autoLigado() || !podeGravar()) return;
@@ -2484,12 +2513,15 @@ function marcarSujo(){
 }
 /* Dá para gravar por três caminhos: a plataforma, a sincronização pelo GitHub
    ou, em último caso, o próprio navegador. Basta um deles estar de pé. */
-const podeGravar = () => podeSalvar || sincLigada() || soLocal;
+const podeGravar = () => !desatualizado && (podeSalvar || sincLigada() || soLocal);
 function estado(msg, cls){
+  const bs = document.getElementById('btn-save');
+  if (bs) bs.disabled = salvando || !podeGravar();
   const el = document.getElementById('savestate');
   el.className = 'savestate' + (cls ? ' '+cls : '');
   el.textContent = msg != null ? msg
     : salvando ? 'salvando…'
+    : desatualizado ? 'página desatualizada — aperte Ctrl+Shift+R'
     : !podeGravar() ? 'somente leitura nesta visualização'
     : sincLigada() ? (sujo ? 'alterações não gravadas no repositório' : 'gravado no repositório')
     : soLocal ? 'salvo no seu navegador · não enviado'
@@ -2548,6 +2580,9 @@ document.addEventListener('change', ev => {
   }
   if (t.dataset.pauto !== undefined){
     S.params.autoSalvar = t.checked; marcarSujo(); redesenharTudo(); return;
+  }
+  if (t.dataset.pbuscar !== undefined){
+    S.params.autoBuscar = t.checked; marcarSujo(); redesenharTudo(); return;
   }
   if (t.dataset.usNome !== undefined){
     const u = usuarios().find(x => x.id === t.dataset.usNome);
@@ -3887,7 +3922,7 @@ async function senhaJaUsada(senha, exceto){
 function cabecalhoCofre(){
   const us = usuarios();
   const pri = p => (us.find(u => (u.papel || 'equipe') === p && u.ativo !== false) || {}).emb;
-  const h = {cofre: 1, v: 2, usuarios: us};
+  const h = {cofre: 1, v: 2, app: VERSAO_APP, usuarios: us};
   const a = pri('admin'), e = pri('equipe');
   if (a) h.admin = a;
   if (e) h.equipe = e;
@@ -3895,7 +3930,7 @@ function cabecalhoCofre(){
 }
 /* O arquivo que vai para o disco: embrulhos em claro, conteúdo cifrado. */
 async function cargaParaSalvar(){
-  if (!DK || !COFRE) return JSON.stringify(S);
+  if (!DK || !COFRE) return JSON.stringify(Object.assign({app: VERSAO_APP}, S));
   const c = await cifrar(DK, S);
   return JSON.stringify(Object.assign(cabecalhoCofre(), {iv: c.iv, ct: c.ct}));
 }
@@ -4348,7 +4383,7 @@ function apagarLocal(){
 
 /* ---- o pacote ---- */
 async function embrulharPacote(){
-  const conteudo = {pacote: 1, estado: S, base: BASE};
+  const conteudo = {pacote: 1, app: VERSAO_APP, estado: S, base: BASE};
   if (!DK || !COFRE) return JSON.stringify(conteudo);
   const c = await cifrar(DK, conteudo);
   return JSON.stringify(Object.assign(cabecalhoCofre(), {iv: c.iv, ct: c.ct}));
@@ -4563,6 +4598,20 @@ function aplicarPacote(){
    O token fica no navegador de cada uma, nunca no repositório nem na página. */
 
 const CHAVE_TOKEN = 'fagron-rs-token';
+/* Número da versão do PROGRAMA (não dos dados). Sobe a cada entrega que muda
+   o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
+   com a página velha de gravar por cima do que ela nem sabe que existe:
+   uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
+const VERSAO_APP = 4;
+let versaoRemota = 0;
+let desatualizado = false;
+const TEXTO_DESATUALIZADO = 'Esta página está desatualizada. Alguém está usando uma versão mais nova '
+  + 'do sistema, com campos que a sua ainda não conhece — gravar assim apagaria o trabalho dela. '
+  + 'Salve nada, aperte Ctrl+Shift+R para atualizar a página, e continue normalmente.';
+function versaoDoTexto(t){
+  try { const p = JSON.parse(t); return (p && typeof p.app === 'number') ? p.app : 0; }
+  catch (e) { return 0; }
+}
 /* A página publicada como artefato roda numa caixa que barra qualquer chamada
    para fora. Não é erro de configuração: é regra da plataforma. A sincronização
    só funciona na versão em arquivo (GitHub Pages ou index.html no computador). */
@@ -4650,7 +4699,10 @@ async function baixarDoGit(){
   if (r.status === 404) return {vazio: true};          /* primeira vez: arquivo ainda não existe */
   const corpo = await r.json().catch(() => null);
   if (!r.ok) throw new Error(erroGit(r, corpo));
-  return {sha: corpo.sha, texto: deB64(corpo.content || '')};
+  const texto = deB64(corpo.content || '');
+  versaoRemota = versaoDoTexto(texto);
+  desatualizado = versaoRemota > VERSAO_APP;
+  return {sha: corpo.sha, texto};
 }
 
 /* ---- subir ---- */
@@ -4701,6 +4753,12 @@ async function puxar(silencioso){
   try {
     const remoto = await baixarDoGit();
     ultimoPuxao = Date.now();
+    if (desatualizado){
+      estado('página desatualizada — atualize com Ctrl+Shift+R', 'err');
+      document.getElementById('btn-save').disabled = true;
+      toast(TEXTO_DESATUALIZADO);
+      return false;
+    }
     if (remoto.vazio){ if (!silencioso) toast('O arquivo ainda não existe no repositório — salve para criá-lo'); return false; }
     if (remoto.sha === shaRemoto){ if (!silencioso) toast('Já está na versão mais recente'); return false; }
     const vindo = await abrirConteudo(remoto.texto);
@@ -4745,6 +4803,7 @@ function aplicarDoRemoto(d){
 /* ---- gravar, resolvendo conflito sozinho ---- */
 async function empurrar(){
   if (!sincLigada()) return false;
+  if (desatualizado) throw new Error(TEXTO_DESATUALIZADO);
   carimbarAutoria();
   const tentar = async (sha) => subirParaGit(await embrulharPacote(), sha);
   try {
@@ -4756,6 +4815,7 @@ async function empurrar(){
     /* alguém gravou antes: junta e tenta de novo, uma vez */
     estado('outra pessoa gravou antes — juntando', 'dirty');
     const remoto = await baixarDoGit();
+    if (desatualizado) throw new Error(TEXTO_DESATUALIZADO);
     const vindo = await abrirConteudo(remoto.texto);
     const estadoRemoto = vindo && vindo.pacote ? vindo.estado : vindo;
     const baseRemota = vindo && vindo.pacote ? vindo.base : null;
@@ -5062,6 +5122,7 @@ async function arrancar(dados){
     if (document.hidden && sujo && !salvando && autoLigado() && podeGravar()) salvar();
   });
   if (sincLigada()) puxar(true);
+  ligarBusca();
 
   window.addEventListener('beforeunload', ev => { if (sujo){ ev.preventDefault(); ev.returnValue = ''; } });
   document.addEventListener('keydown', ev => {
