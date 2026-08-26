@@ -4437,8 +4437,10 @@ async function lerPacote(){
           <b>${d.conflitos.length} registro(s) foram mexidos dos dois lados.</b>
           Por padrão eu <b>mantenho a sua versão</b>. Marque os que devem ficar com a versão do pacote:</div>
         <ul class="rclista rcconf">${d.conflitos.map((c,i) => `<li>
-          <label><input type="checkbox" data-cf="${i}"> ${rotuloDe(c.col, c.pkg)}
-          <span class="opc">— aqui: ${esc(resumoReg(c.aqui))} · no pacote: ${esc(resumoReg(c.pkg))}</span></label></li>`).join('')}</ul>`
+          <label><input type="checkbox" data-cf="${i}"> ${rotuloDe(c.col, c.pkg || c.aqui)}
+          <span class="opc">— ${c.apagar
+            ? 'a outra pessoa <b>apagou</b>; aqui está alterado: ' + esc(resumoReg(c.aqui)) + '. Marque para apagar também'
+            : 'aqui: ' + esc(resumoReg(c.aqui)) + ' · no pacote: ' + esc(resumoReg(c.pkg))}</span></label></li>`).join('')}</ul>`
         : ''}
       ${d.somem.length ? `<div class="cvfalta" style="margin-top:10px">${d.somem.length} registro(s) existem aqui e não vêm no pacote.
         <b>Ficam como estão</b> — incorporar nunca apaga nada.</div>` : ''}
@@ -4478,10 +4480,28 @@ function compararPacote(estado, base){
       if (euMexi) conflitos.push({col, pkg: r, aqui: atual});
       else mudados.push(r);
     });
+    /* Exclusão: o registro estava no ponto de partida de quem enviou e não veio
+       no estado dela. Sem esta comparação, apagar não atravessa — quem apagou
+       vê sumir, e na primeira gravação da outra pessoa o registro ressuscita. */
     const ids = new Set((estado[col] || []).map(r => r.id));
-    (S[col] || []).forEach(r => { if (!ids.has(r.id)) somem.push(r); });
-    plano[col] = {novos, mudados};
-    total += novos.length + mudados.length;
+    const apagados = [];
+    if (partida){
+      Object.keys(partida).forEach(id => {
+        if (ids.has(id)) return;                       /* continua lá */
+        const meu = aqui.get(id);
+        if (!meu) return;                              /* aqui também já não existe */
+        if (assinar(meu) !== partida[id]) conflitos.push({col, pkg: null, aqui: meu, apagar: true});
+        else apagados.push(meu);
+      });
+    }
+    (S[col] || []).forEach(r => {
+      if (ids.has(r.id)) return;
+      if (partida && partida[r.id] !== undefined) return;   /* já contado como exclusão */
+      somem.push(r);
+    });
+    plano[col] = {novos, mudados, apagados};
+    total += novos.length + mudados.length + apagados.length;
+    if (apagados.length) linhas.push(`<b>${apagados.length}</b> em ${col}: ${apagados.slice(0,4).map(r => rotuloDe(col, r)).join(', ')}${apagados.length>4?' e mais…':''} <span class="opc">apagados pela outra pessoa</span>`);
     if (novos.length) linhas.push(`<b>${novos.length}</b> em ${col}: ${novos.slice(0,4).map(r => rotuloDe(col, r)).join(', ')}${novos.length>4?' e mais…':''} <span class="opc">novos</span>`);
     if (mudados.length) linhas.push(`<b>${mudados.length}</b> em ${col}: ${mudados.slice(0,4).map(r => rotuloDe(col, r)).join(', ')}${mudados.length>4?' e mais…':''} <span class="opc">alterados</span>`);
   });
@@ -4505,9 +4525,14 @@ function aplicarPacote(){
     if (!p) return;
     const pos = new Map((S[col] || []).map((r, i) => [r.id, i]));
     p.mudados.forEach(r => { S[col][pos.get(r.id)] = r; });
+    if (p.apagados && p.apagados.length){
+      const fora = new Set(p.apagados.map(r => r.id));
+      S[col] = S[col].filter(r => !fora.has(r.id));
+    }
     p.novos.forEach(r => S[col].unshift(r));
   });
   escolhidos.forEach(c => {
+    if (c.apagar){ S[c.col] = S[c.col].filter(r => r.id !== c.aqui.id); return; }
     const i = S[c.col].findIndex(r => r.id === c.pkg.id);
     if (i >= 0) S[c.col][i] = c.pkg;
   });
@@ -4704,6 +4729,10 @@ function aplicarDoRemoto(d){
     if (!p) return;
     const pos = new Map((S[col] || []).map((r, i) => [r.id, i]));
     p.mudados.forEach(r => { S[col][pos.get(r.id)] = r; });
+    if (p.apagados && p.apagados.length){
+      const fora = new Set(p.apagados.map(r => r.id));
+      S[col] = S[col].filter(r => !fora.has(r.id));
+    }
     p.novos.forEach(r => S[col].unshift(r));
   });
   d.listasNovas.forEach(([k, v]) => {
