@@ -2931,17 +2931,17 @@ document.addEventListener('change', ev => {
   }
   if (t.dataset.usNome !== undefined){
     const u = usuarios().find(x => x.id === t.dataset.usNome);
-    if (u){ const n = caixaAlta(t.value.trim()); if (n){ u.nome = n; if (EU && EU.id === u.id) EU = u; marcarSujo(); render(); } else t.value = u.nome; }
+    if (u){ const n = caixaAlta(t.value.trim()); if (n){ u.nome = n; usuariosMexidos.add(u.id); if (EU && EU.id === u.id) EU = u; marcarSujo(); render(); } else t.value = u.nome; }
     return;
   }
   if (t.dataset.usPapel !== undefined){
     const u = usuarios().find(x => x.id === t.dataset.usPapel);
-    if (u){ u.papel = t.value; if (EU && EU.id === u.id) PAPEL = t.value; marcarSujo(); telaUsuarios(); render(); }
+    if (u){ u.papel = t.value; usuariosMexidos.add(u.id); if (EU && EU.id === u.id) PAPEL = t.value; marcarSujo(); telaUsuarios(); render(); }
     return;
   }
   if (t.dataset.usAtivo !== undefined){
     const u = usuarios().find(x => x.id === t.dataset.usAtivo);
-    if (u){ u.ativo = t.checked; marcarSujo(); telaUsuarios(); render(); }
+    if (u){ u.ativo = t.checked; usuariosMexidos.add(u.id); marcarSujo(); telaUsuarios(); render(); }
     return;
   }
   if (t.dataset.pemp !== undefined){
@@ -4594,7 +4594,9 @@ async function adicionarUsuario(){
     const igual = await senhaJaUsada(s1);
     if (igual){ btn.disabled = false; btn.textContent = 'Adicionar';
       return erroUsuarios('Essa senha já é de <b>' + esc(igual.nome) + '</b>. Duas pessoas com a mesma senha ficam indistinguíveis — escolha outra.'); }
-    COFRE.usuarios.push({id: novoIdUsuario(), nome, papel, ativo: true, emb: await embrulhar(DK, s1)});
+    const idNovo = novoIdUsuario();
+    COFRE.usuarios.push({id: idNovo, nome, papel, ativo: true, emb: await embrulhar(DK, s1)});
+    usuariosMexidos.add(idNovo);
     marcarSujo(); telaUsuarios(); render();
     toast(nome + ' entrou — clique em Salvar para valer para as outras');
   } catch (e){
@@ -4618,6 +4620,7 @@ async function trocarSenhaUsuario(){
     if (igual){ btn.disabled = false; btn.textContent = 'Trocar senha';
       return erroUsuarios('Essa senha já é de <b>' + esc(igual.nome) + '</b>. Escolha outra.'); }
     u.emb = await embrulhar(DK, n1);
+    usuariosMexidos.add(u.id);
     marcarSujo(); telaUsuarios(); render();
     toast('Senha de ' + u.nome + ' trocada — clique em Salvar');
   } catch (e){
@@ -4634,6 +4637,7 @@ function removerUsuario(id){
     'Tirar').then(ok => {
       if (!ok) return;
       COFRE.usuarios = COFRE.usuarios.filter(x => x.id !== id);
+      usuariosMexidos.add(id);
       marcarSujo(); telaUsuarios(); render();
       toast(u.nome + ' saiu — clique em Salvar para valer');
     });
@@ -4683,6 +4687,17 @@ const CHAVE_LOCAL = 'fagron-rs-local';
    ou se está só devolvendo a versão antiga — sem isso o pacote apagaria o que
    a administradora fez enquanto isso. */
 let BASE = null;
+/* Os parâmetros e a lista de pessoas não são registros: não entram no cotejo
+   por id. Sem um ponto de partida próprio, quem estivesse com o sistema aberto
+   regravava a configuração antiga por cima — inclusive apagando gente que a
+   administradora tinha acabado de cadastrar. */
+let BASE_PARAMS = null;
+let usuariosMexidos = new Set();
+function marcarPartida(){
+  BASE = assinarTudo(S);
+  BASE_PARAMS = JSON.parse(JSON.stringify(S.params || {}));
+  usuariosMexidos = new Set();
+}
 /* A assinatura ignora os campos de autoria (começam com _). Sem isso, carimbar
    quem mexeu já contaria como "mexeu de novo" e o cotejo nunca estabilizaria. */
 function semAutoria(o){
@@ -4966,8 +4981,9 @@ const CHAVE_TOKEN = 'fagron-rs-token';
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 5;
+const VERSAO_APP = 6;
 let versaoRemota = 0;
+let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
 const TEXTO_DESATUALIZADO = 'Esta página está desatualizada. Alguém está usando uma versão mais nova '
   + 'do sistema, com campos que a sua ainda não conhece — gravar assim apagaria o trabalho dela. '
@@ -5097,6 +5113,7 @@ async function abrirConteudo(texto){
   let pac = null;
   try { pac = JSON.parse(texto); } catch (e) { return {}; }
   if (!pac || typeof pac !== 'object') return {};
+  usuariosRemotos = Array.isArray(pac.usuarios) ? pac.usuarios : null;
   if (!ehCofre(pac)) return pac;
   if (!DK) throw new Error('senha');
   try {
@@ -5130,12 +5147,18 @@ async function puxar(silencioso){
     const base = vindo && vindo.pacote ? vindo.base : null;
     const d = compararPacote(estado, base);
     shaRemoto = remoto.sha;
-    if (!d.total && !d.conflitos.length){ if (!silencioso) toast('Nada de novo'); return false; }
+    const nP = fundirParams(estado && estado.params);
+    const nU = fundirUsuarios();
+    if (!d.total && !d.conflitos.length && !nP && !nU){ if (!silencioso) toast('Nada de novo'); return false; }
     /* o que a outra pessoa mexeu entra; o que você mexeu depois continua seu */
     aplicarDoRemoto(d);
-    BASE = assinarTudo(S);
+    marcarPartida();
     render();
-    toast(`${d.total + d.conflitos.length} alteração(ões) de outra pessoa` +
+    const partes = [];
+    if (d.total + d.conflitos.length) partes.push(`${d.total + d.conflitos.length} alteração(ões) de outra pessoa`);
+    if (nU) partes.push('a lista de pessoas com acesso mudou');
+    if (nP) partes.push(`${nP} ajuste(s) de configuração`);
+    toast(partes.join(' · ') +
           (d.conflitos.length ? ` — ${d.conflitos.length} mexida(s) pelas duas ficaram com a sua versão` : ''));
     return true;
   } catch (e) {
@@ -5144,6 +5167,40 @@ async function puxar(silencioso){
     return false;
   } finally { sincronizando = false; }
 }
+/* Parâmetros: chave por chave, a versão dela entra no que eu não mexi.
+   O que eu mexi nesta sessão continua meu, como nos registros. */
+function fundirParams(remotos){
+  if (!remotos || !BASE_PARAMS) return 0;
+  let n = 0;
+  Object.keys(remotos).forEach(k => {
+    const meu = JSON.stringify(S.params[k]);
+    const partida = JSON.stringify(BASE_PARAMS[k]);
+    const dela = JSON.stringify(remotos[k]);
+    if (dela === meu) return;
+    if (meu === partida){ S.params[k] = JSON.parse(dela); n++; }
+  });
+  return n;
+}
+/* Pessoas com acesso: mesma regra, por pessoa. Quem eu não toquei vem como
+   está no repositório — inclusive gente nova e gente que saiu. */
+function fundirUsuarios(){
+  if (!usuariosRemotos || !COFRE) return 0;
+  const antes = JSON.stringify(COFRE.usuarios.map(u => u.id + ':' + u.nome + ':' + u.papel + ':' + (u.ativo !== false)));
+  const meus = new Map(COFRE.usuarios.map(u => [u.id, u]));
+  const deles = new Map(usuariosRemotos.map(u => [u.id, u]));
+  const nova = [];
+  deles.forEach((u, id) => { nova.push(usuariosMexidos.has(id) ? meus.get(id) : u); });
+  meus.forEach((u, id) => { if (!deles.has(id) && usuariosMexidos.has(id)) nova.push(u); });
+  COFRE.usuarios = nova.filter(Boolean);
+  if (EU){
+    const eu = COFRE.usuarios.find(u => u.id === EU.id);
+    if (eu) EU = eu, PAPEL = eu.papel || 'equipe';
+    else toast('A administradora tirou o seu acesso. Você continua nesta aba até fechar a página.');
+  }
+  const depois = JSON.stringify(COFRE.usuarios.map(u => u.id + ':' + u.nome + ':' + u.papel + ':' + (u.ativo !== false)));
+  return antes === depois ? 0 : 1;
+}
+
 /* mesma mecânica do pacote, sem perguntar: entra tudo que só a outra mexeu */
 function aplicarDoRemoto(d){
   COLECOES.forEach(col => {
@@ -5172,7 +5229,7 @@ async function empurrar(){
   const tentar = async (sha) => subirParaGit(await embrulharPacote(), sha);
   try {
     shaRemoto = await tentar(shaRemoto);
-    BASE = assinarTudo(S);
+    marcarPartida();
     return true;
   } catch (e) {
     if (String(e.message) !== 'conflito') throw e;
@@ -5184,9 +5241,11 @@ async function empurrar(){
     const estadoRemoto = vindo && vindo.pacote ? vindo.estado : vindo;
     const baseRemota = vindo && vindo.pacote ? vindo.base : null;
     const d = compararPacote(estadoRemoto, baseRemota);
+    fundirParams(estadoRemoto && estadoRemoto.params);
+    fundirUsuarios();
     aplicarDoRemoto(d);
     shaRemoto = await tentar(remoto.sha);
-    BASE = assinarTudo(S);
+    marcarPartida();
     render();
     toast('Juntado com o que a outra pessoa gravou' +
           (d.conflitos.length ? ` — ${d.conflitos.length} registro(s) ficaram com a sua versão` : ''));
@@ -5468,6 +5527,8 @@ async function arrancar(dados){
   const semente = JSON.parse(document.getElementById('semente').textContent);
   S = normalizar(dados, semente);
   if (!BASE) BASE = assinarTudo(S);   /* ponto de partida desta sessão */
+  BASE_PARAMS = JSON.parse(JSON.stringify(S.params || {}));
+  usuariosMexidos = new Set();
 
   /* As pontes NÃO rodam ao carregar: só o que você marcar de agora em diante
      alimenta as outras abas. Assim o histórico migrado não é reprocessado. */
