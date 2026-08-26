@@ -83,6 +83,10 @@
   --warn:#8A5D08; --warn-bg:#F7EDD8;
   --crit:#A93226; --crit-bg:#F8E4E1;
   --ser:#8A4218;  --ser-bg:#FBE7DE;
+  --azul:#1F4C7A; --azul-bg:#E3ECF7;
+  --roxo:#5A3E86; --roxo-bg:#EDE7F6;
+  --teal:#1F5C56; --teal-bg:#DFF0EE;
+  --rosa:#8A2B50; --rosa-bg:#FBE4EC;
   --t1:#B2B2AB; --t1-ink:#1F1F1D;
   --t2:#6A6A62; --t2-ink:#FFFFFF;
   --t3:#33332F; --t3-ink:#FFFFFF;
@@ -102,6 +106,10 @@
     --warn:#D6A445; --warn-bg:#2E2616;
     --crit:#DE7B6B; --crit-bg:#331B18;
     --ser:#E0906A;  --ser-bg:#33221A;
+    --azul:#8FBADD; --azul-bg:#172533;
+    --roxo:#B29BDD; --roxo-bg:#241E33;
+    --teal:#7BC2B8; --teal-bg:#142A28;
+    --rosa:#E08FA9; --rosa-bg:#2E1A22;
     --t1:#4A4A45; --t1-ink:#FFFFFF;
     --t2:#8C8C84; --t2-ink:#141413;
     --t3:#CFCFC8; --t3-ink:#1F1F1D;
@@ -121,6 +129,10 @@
   --warn:#D6A445; --warn-bg:#2E2616;
   --crit:#DE7B6B; --crit-bg:#331B18;
   --ser:#E0906A;  --ser-bg:#33221A;
+  --azul:#8FBADD; --azul-bg:#172533;
+  --roxo:#B29BDD; --roxo-bg:#241E33;
+  --teal:#7BC2B8; --teal-bg:#142A28;
+  --rosa:#E08FA9; --rosa-bg:#2E1A22;
   --t1:#4A4A45; --t1-ink:#FFFFFF;
   --t2:#8C8C84; --t2-ink:#141413;
   --t3:#CFCFC8; --t3-ink:#1F1F1D;
@@ -383,6 +395,14 @@ select.stt{border-left:3px solid transparent}
 .stt.s-ser{background:var(--ser-bg);  color:var(--ser)}
 .stt.s-crit{background:var(--crit-bg); color:var(--crit)}
 .stt.s-off{background:var(--surface-3); color:var(--ink-faint)}
+.stt.s-azul{background:var(--azul-bg); color:var(--azul)}
+.stt.s-roxo{background:var(--roxo-bg); color:var(--roxo)}
+.stt.s-teal{background:var(--teal-bg); color:var(--teal)}
+.stt.s-rosa{background:var(--rosa-bg); color:var(--rosa)}
+/* seletor de cor na Base: mostra a própria cor e abre a paleta ao clicar */
+select.swsel{width:104px; min-width:104px; height:24px; padding:0 6px; border:1px solid var(--rule-strong);
+  cursor:pointer; font-size:11.5px; font-weight:500}
+select.swsel option{background:var(--surface); color:var(--ink)}
 table.grid tr:hover td select.stt{filter:brightness(1.04)}
 .pill.ser{background:var(--ser-bg); color:var(--ser)}
 /* amostra de cor na aba Base */
@@ -660,7 +680,7 @@ table.grid.cabe .rowbtn{padding:2px 5px; font-size:11px}
 <div class="cadeado" id="cadeado" hidden></div>
 <div class="modal" id="modal" hidden></div>
 
-<script type="application/json" id="semente">{"versao":2,"reset":"2026-08-22-limpeza-2","params":{"etapas":[{"n":1,"nome":"Alinhamento com o gestor","sla":1},{"n":2,"nome":"Divulgação publicada","sla":2},{"n":3,"nome":"Triagem concluída","sla":5},{"n":4,"nome":"Envio de parecer / shortlist","sla":10},{"n":5,"nome":"Entrevista com o gestor","sla":15},{"n":6,"nome":"Aprovação do gestor","sla":18},{"n":7,"nome":"Proposta enviada","sla":20},{"n":8,"nome":"Proposta aceita","sla":23},{"n":9,"nome":"Exame admissional","sla":27},{"n":10,"nome":"Admissão concluída","sla":30}],"agingVerde":0.7,"agingAmarelo":1.0,"expP1":45,"expP2":90,"metaSla":0.9,"metaCandVaga":8,"metaComparecimento":0.7,"slaCiee":2,"empresaIntegracao":"FAGRON SERVICES","autoSalvar":true,"autoBuscar":true,"sinc":{"repo":"RecrutamentoeSelecao/rs-fagron-dados","arquivo":"dados.json","branch":"main"},"empresasUniforme":["FAGRON SERVICES","FAGRON DISTRIBUTION"]},"listas":{"empresas":[],"cargos":[],"departamentos":[],"statusVaga":[],"tipoVaga":[],"prioridade":[],"statusCand":[],"fontes":[],"motivos":[],"checklist":[],"tamanhos":[],"terceiros":[],"instituicoes":[],"feriados":[]},"vagas":[],"candidatos":[],"experiencia":[],"admissao":[],"integracao":[],"contratos":[],"uniformes":[],"notas":[],"trancado":true}</script>
+<script type="application/json" id="semente">{"versao":2,"reset":"2026-08-22-limpeza-2","params":{"etapas":[{"n":1,"nome":"Alinhamento com o gestor","sla":1},{"n":2,"nome":"Divulgação publicada","sla":2},{"n":3,"nome":"Triagem concluída","sla":5},{"n":4,"nome":"Envio de parecer / shortlist","sla":10},{"n":5,"nome":"Entrevista com o gestor","sla":15},{"n":6,"nome":"Aprovação do gestor","sla":18},{"n":7,"nome":"Proposta enviada","sla":20},{"n":8,"nome":"Proposta aceita","sla":23},{"n":9,"nome":"Exame admissional","sla":27},{"n":10,"nome":"Admissão concluída","sla":30}],"agingVerde":0.7,"agingAmarelo":1.0,"expP1":45,"expP2":90,"metaSla":0.9,"metaCandVaga":8,"metaComparecimento":0.7,"slaCiee":2,"empresaIntegracao":"FAGRON SERVICES","autoSalvar":true,"autoBuscar":true,"cores":{"statusVaga":{},"statusCand":{}},"sinc":{"repo":"RecrutamentoeSelecao/rs-fagron-dados","arquivo":"dados.json","branch":"main"},"empresasUniforme":["FAGRON SERVICES","FAGRON DISTRIBUTION"]},"listas":{"empresas":[],"cargos":[],"departamentos":[],"statusVaga":[],"tipoVaga":[],"prioridade":[],"statusCand":[],"fontes":[],"motivos":[],"checklist":[],"tamanhos":[],"terceiros":[],"instituicoes":[],"feriados":[]},"vagas":[],"candidatos":[],"experiencia":[],"admissao":[],"integracao":[],"contratos":[],"uniformes":[],"notas":[],"trancado":true}</script>
 
 <script>
 "use strict";
@@ -1149,7 +1169,7 @@ function renderVagas(){
     const fk = {saudavel:'good', atencao:'warn', critico:'crit', concluida:'neut'}[c.farol] || 'neut';
     const fl = {saudavel:'🟢 Saudável', atencao:'🟡 Atenção', critico:'🔴 Crítico', concluida:'⚪ Concluída'}[c.farol] || '—';
     h += `<tr${autoriaAttr(v)}><td ${fx('id','idcell')}>${v.id}</td>
-      <td ${fx('status')}>${cStt(i,'status',v.status,L.statusVaga,COR_STATUS_VAGA)}</td>
+      <td ${fx('status')}>${cStt(i,'status',v.status,L.statusVaga,'statusVaga')}</td>
       <td ${fx('empresa')}>${cLista(i,'empresa',v.empresa,'empresas')}</td>
       <td ${fx('cargo')}>${cBase(i,'cargo',v.cargo,'cargos')}</td>
       <td ${fx('substituido')}>${cWrap(i,'substituido',v.substituido)}</td>
@@ -1314,7 +1334,7 @@ function renderCandidatos(){
       <td>${cTxt(i,'email',c.email)}</td>
       <td>${cLista(i,'fonte',c.fonte,'fontes')}</td>
       <td>${cDate(i,'dtCand',c.dtCand)}</td>
-      <td>${cStt(i,'status',c.status,L.statusCand,COR_STATUS_CAND)}</td>
+      <td>${cStt(i,'status',c.status,L.statusCand,'statusCand')}</td>
       <td>${cSel(i,'motivo',c.motivo,L.motivos)}</td>
       <td>${cDate(i,'dtTriagem',c.dtTriagem)}</td>
       <td>${cDate(i,'dtRH',c.dtRH)}</td>
@@ -1602,11 +1622,42 @@ const COR_STATUS_CAND = {
   'Já está trabalhando':'s-off', 'Desistiu':'s-off',
 };
 const COR_LISTA = { statusVaga: COR_STATUS_VAGA, statusCand: COR_STATUS_CAND };
+/* A paleta oferecida na Base. As classes já existem no CSS e foram desenhadas
+   para os dois temas — por isso a escolha é entre cores prontas, e não um
+   seletor livre: cor escolhida no claro costuma ficar ilegível no escuro. */
+const PALETA = [
+  ['',        'Padrão'],
+  ['s-good',  'Verde'],
+  ['s-warn',  'Amarelo'],
+  ['s-ser',   'Laranja'],
+  ['s-crit',  'Vermelho'],
+  ['s-azul',  'Azul'],
+  ['s-roxo',  'Roxo'],
+  ['s-teal',  'Verde-água'],
+  ['s-rosa',  'Rosa'],
+  ['t1',      'Cinza claro'],
+  ['t2',      'Cinza médio'],
+  ['t3',      'Cinza escuro'],
+  ['s-off',   'Neutro'],
+];
+const coresDe = lk => (S.params.cores && S.params.cores[lk]) || {};
+function guardarCor(lk, v, classe){
+  if (!S.params.cores) S.params.cores = {};
+  if (!S.params.cores[lk]) S.params.cores[lk] = {};
+  if (classe) S.params.cores[lk][v] = classe;
+  else delete S.params.cores[lk][v];
+}
 /* Status que ela criar depois entra como neutro — nada quebra. */
-function corStatus(mapa, v){ return mapa[v] || (v ? 's-off' : ''); }
+function corStatus(lk, v){
+  if (!v) return '';
+  const escolhida = coresDe(lk)[v];
+  if (escolhida) return escolhida;
+  const mapa = COR_LISTA[lk] || {};
+  return mapa[v] || 's-off';
+}
 /* Célula editável que carrega a própria cor do status. */
-const cStt = (i,f,v,lista,mapa) =>
-  `<select class="cell stt ${corStatus(mapa, v)}" data-i="${i}" data-f="${f}">${opts(lista, v)}</select>`;
+const cStt = (i,f,v,lista,lk) =>
+  `<select class="cell stt ${corStatus(lk, v)}" data-i="${i}" data-f="${f}">${opts(lista, v)}</select>`;
 
 /* ============================================================ MÓDULOS */
 function vagaPorId(id){ return S.vagas.find(v => v.id === id) || null; }
@@ -2351,12 +2402,15 @@ function renderBase(){
     const fora = orfaos(meta);
     h += `<div class="pbox"><h3>${meta.t} <span class="listcount">${lista.length}</span></h3>
       <div class="listbox">`;
-    const mapaCor = COR_LISTA[meta.k];
+    const temCor = !!COR_LISTA[meta.k];
     lista.forEach((v, j) => {
       const n = meta.usos.length ? contarUso(meta, v) : null;
-      const cor = mapaCor ? corStatus(mapaCor, v) : null;
+      const cor = temCor ? corStatus(meta.k, v) : null;
+      const escolhida = temCor ? (coresDe(meta.k)[v] || '') : '';
       h += `<div class="lrow">
-        ${cor ? `<span class="sw stt ${cor}" title="cor deste status na grade"></span>` : ''}
+        ${temCor ? `<select class="swsel stt ${cor}" data-cor="${meta.k}" data-val="${esc(v)}"
+            title="Cor deste status na grade">${PALETA.map(([c, nome]) =>
+            `<option value="${c}"${c === escolhida ? ' selected' : ''}>${esc(nome)}</option>`).join('')}</select>` : ''}
         <input class="litem${cor?' comsw':''}" data-lista="${meta.k}" data-j="${j}" value="${esc(v)}">
         <span class="luso" title="${n} registro(s) usam este valor">${n==null?'':n||''}</span>
         ${meta.ordenada ? `<button class="rowbtn" data-mv="${meta.k}" data-j="${j}" data-dir="-1" title="Subir">↑</button>
@@ -2588,6 +2642,9 @@ document.addEventListener('change', ev => {
     if (S.listas[k].some((x, n) => x === novo && n !== j)){ t.value = antigo; toast('Esse item já existe na lista'); return; }
     const n = contarUso(META(k), antigo);
     S.listas[k][j] = novo;
+    /* a cor é guardada pelo nome do status: renomeou, a cor vai junto */
+    const escolhidas = S.params.cores && S.params.cores[k];
+    if (escolhidas && escolhidas[antigo]){ escolhidas[novo] = escolhidas[antigo]; delete escolhidas[antigo]; }
     renomearValor(META(k), antigo, novo);
     if (k === 'feriados') delete S._feriados;
     marcarSujo(); redesenharTudo();
@@ -2598,6 +2655,10 @@ document.addEventListener('change', ev => {
     const e = t.dataset.pempUni;
     const lista = S.params.empresasUniforme = (S.params.empresasUniforme || []).filter(x => x !== e);
     if (t.checked) lista.push(e);
+    marcarSujo(); redesenharTudo(); return;
+  }
+  if (t.dataset.cor !== undefined){
+    guardarCor(t.dataset.cor, t.dataset.val, t.value);
     marcarSujo(); redesenharTudo(); return;
   }
   if (t.dataset.pauto !== undefined){
@@ -2847,6 +2908,7 @@ document.addEventListener('click', async ev => {
       if (!ok) return;
     }
     S.listas[k].splice(j, 1);
+    if (S.params.cores && S.params.cores[k]) delete S.params.cores[k][v];
     if (k === 'checklist') checklistSaiu(j);      /* a resposta sai junto com a tarefa */
     if (k === 'feriados') delete S._feriados;
     marcarSujo(); render();
