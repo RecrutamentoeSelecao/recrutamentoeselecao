@@ -2474,6 +2474,28 @@ function aplicarRolagens(painel, ctx){
 }
 /* Use estas duas em vez de chamar o render direto depois de uma edição. */
 function redesenhar(){ const c = contextoUI(); RENDER[ui.tab](); restaurarUI(c); }
+/* Campo de data é digitado em três pedaços — dia, mês, ano. O navegador avisa
+   "mudou" assim que a data fica válida, ainda no meio da digitação do ano, e
+   redesenhar ali joga o cursor de volta para o dia: a pessoa nunca consegue
+   terminar de escrever o ano. Então, em data, o desenho espera ela sair do
+   campo. O dado em si é gravado na hora, como nos outros campos. */
+let relogioData = null;
+function redesenharDepois(el){
+  /* Em data, o desenho espera a pessoa sair do campo. Não dá para amarrar isso
+     ao focusout: o navegador dispara "mudou" várias vezes durante a digitação,
+     em ordens diferentes conforme o caminho (teclado, setas, calendário).
+     Então o campo é simplesmente vigiado: enquanto tiver o foco, não redesenha. */
+  if (el && el.type === 'date'){
+    clearTimeout(relogioData);
+    const espera = () => {
+      if (document.activeElement === el){ relogioData = setTimeout(espera, 250); return; }
+      redesenhar();
+    };
+    relogioData = setTimeout(espera, 250);
+    return;
+  }
+  redesenhar();
+}
 function redesenharTudo(){ const c = contextoUI(); render(); restaurarUI(c); }
 
 /* ============================================================ EDIÇÃO */
@@ -2616,7 +2638,7 @@ document.addEventListener('change', ev => {
   if (!col) return;
   if (t.dataset.et !== undefined){
     S.vagas[+t.dataset.i].etapas[+t.dataset.et] = t.value || null;
-    marcarSujo(); redesenhar(); return;
+    marcarSujo(); redesenharDepois(t); return;
   }
   if (t.dataset.base !== undefined && t.value === '__novo__'){
     const obj = S[col][+t.dataset.i], f = t.dataset.f, lk = t.dataset.base;
@@ -2642,7 +2664,7 @@ document.addEventListener('change', ev => {
       if (novos.length) toast('Vaga fechada — ' + novos[0] + ' entrou na Admissão e nos controles seguintes');
       else if (antes && ESPELHADOS.includes(f)) toast('Atualizado também nas outras abas');
     }
-    redesenhar();
+    redesenharDepois(t);
   }
 });
 
