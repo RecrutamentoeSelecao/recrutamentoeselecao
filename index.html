@@ -732,7 +732,7 @@ table.grid.cabe .rowbtn{padding:2px 5px; font-size:11px}
 <div class="cadeado" id="cadeado" hidden></div>
 <div class="modal" id="modal" hidden></div>
 
-<script type="application/json" id="semente">{"versao":2,"reset":"2026-08-22-limpeza-2","params":{"etapas":[{"n":1,"nome":"Alinhamento com o gestor","sla":1},{"n":2,"nome":"Divulgação publicada","sla":2},{"n":3,"nome":"Triagem concluída","sla":5},{"n":4,"nome":"Envio de parecer / shortlist","sla":10},{"n":5,"nome":"Entrevista com o gestor","sla":15},{"n":6,"nome":"Aprovação do gestor","sla":18},{"n":7,"nome":"Proposta enviada","sla":20},{"n":8,"nome":"Proposta aceita","sla":23},{"n":9,"nome":"Exame admissional","sla":27},{"n":10,"nome":"Admissão concluída","sla":30}],"agingVerde":0.7,"agingAmarelo":1.0,"expP1":45,"expP2":90,"metaSla":0.9,"metaCandVaga":8,"metaComparecimento":0.7,"slaCiee":2,"empresaIntegracao":"FAGRON SERVICES","autoSalvar":true,"autoBuscar":true,"cores":{"statusVaga":{},"statusCand":{}},"sinc":{"repo":"RecrutamentoeSelecao/rs-fagron-dados","arquivo":"dados.json","branch":"main"},"empresasUniforme":["FAGRON SERVICES","FAGRON DISTRIBUTION"]},"listas":{"empresas":[],"cargos":[],"departamentos":[],"gestores":[],"statusVaga":[],"tipoVaga":[],"prioridade":[],"statusCand":[],"fontes":[],"motivos":[],"checklist":[],"tamanhos":[],"terceiros":[],"instituicoes":[],"feriados":[]},"vagas":[],"candidatos":[],"experiencia":[],"admissao":[],"integracao":[],"contratos":[],"uniformes":[],"notas":[],"trancado":true}</script>
+<script type="application/json" id="semente">{"versao":2,"reset":"2026-08-22-limpeza-2","params":{"etapas":[{"n":1,"nome":"Alinhamento","sla":1},{"n":2,"nome":"Divulgação","sla":2},{"n":3,"nome":"Triagem CV RH","sla":5},{"n":4,"nome":"Triagem CV Gestor","sla":7},{"n":5,"nome":"Entrevista RH","sla":9},{"n":6,"nome":"Parecer","sla":10},{"n":7,"nome":"Entrevista Gestor","sla":15},{"n":8,"nome":"Aprovação","sla":18}],"etapasV":2,"agingVerde":0.7,"agingAmarelo":1.0,"expP1":45,"expP2":90,"metaSla":0.9,"metaCandVaga":8,"metaComparecimento":0.7,"slaCiee":2,"empresaIntegracao":"FAGRON SERVICES","autoSalvar":true,"autoBuscar":true,"cores":{"statusVaga":{},"statusCand":{}},"sinc":{"repo":"RecrutamentoeSelecao/rs-fagron-dados","arquivo":"dados.json","branch":"main"},"empresasUniforme":["FAGRON SERVICES","FAGRON DISTRIBUTION"]},"listas":{"empresas":[],"cargos":[],"departamentos":[],"gestores":[],"statusVaga":[],"tipoVaga":[],"prioridade":[],"statusCand":[],"fontes":[],"motivos":[],"checklist":[],"tamanhos":[],"terceiros":[],"instituicoes":[],"feriados":[]},"vagas":[],"candidatos":[],"experiencia":[],"admissao":[],"integracao":[],"contratos":[],"uniformes":[],"notas":[],"trancado":true}</script>
 
 <script>
 "use strict";
@@ -797,25 +797,99 @@ function avg(a){ return a.length ? a.reduce((x,y)=>x+y,0)/a.length : null; }
 function d1(v){ return v==null ? '—' : (Math.round(v*10)/10).toLocaleString('pt-BR'); }
 function pct(v){ return v==null ? '—' : (v*100).toFixed(1).replace('.',',')+'%'; }
 
+/* ======================================================= RÉGUA DE ETAPAS
+   Em agosto/2026 a régua encolheu de dez para oito etapas: saiu tudo que era
+   pós-aprovação (proposta, aceite, exame, admissão concluída) e entraram
+   Triagem CV Gestor e Entrevista RH. As datas já digitadas viajam pelo NOME
+   da etapa, nunca pela posição — por isso ninguém perde o que preencheu. A
+   antiga "Admissão concluída" vira a Data de admissão da vaga. */
+const chaveEtapa = t => String(t == null ? '' : t)
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+const ETAPA_DE_PARA = {
+  'ALINHAMENTO COM O GESTOR'    : 'ALINHAMENTO',
+  'DIVULGACAO PUBLICADA'        : 'DIVULGACAO',
+  'TRIAGEM CONCLUIDA'           : 'TRIAGEM CV RH',
+  'ENVIO DE PARECER / SHORTLIST': 'PARECER',
+  'ENTREVISTA COM O GESTOR'     : 'ENTREVISTA GESTOR',
+  'APROVACAO DO GESTOR'         : 'APROVACAO',
+};
+const ETAPA_ADMISSAO = 'ADMISSAO CONCLUIDA';
+
+function migrarEtapas(S2, semente){
+  const alvo = (semente.params && semente.params.etapas) || null;
+  if (!Array.isArray(alvo) || !alvo.length) return 0;
+  const vNova = semente.params.etapasV || 0;
+  if (!vNova || (S2.params.etapasV || 0) >= vNova) return 0;
+  const velhas = Array.isArray(S2.params.etapas) ? S2.params.etapas : [];
+  const destino = new Map(alvo.map((e, i) => [chaveEtapa(e.nome), i]));
+  const iAdm = velhas.findIndex(e => chaveEtapa(e.nome) === ETAPA_ADMISSAO);
+  const mapa = velhas.map(e => {
+    const k = chaveEtapa(e.nome);
+    if (destino.has(k)) return destino.get(k);
+    const alt = chaveEtapa(ETAPA_DE_PARA[k] || '');
+    return (alt && destino.has(alt)) ? destino.get(alt) : -1;
+  });
+  let n = 0;
+  (S2.vagas || []).forEach(v => {
+    const antigas = Array.isArray(v.etapas) ? v.etapas.slice() : [];
+    const novas = alvo.map(() => null);
+    antigas.forEach((d, i) => { const j = mapa[i]; if (j >= 0 && d && !novas[j]) novas[j] = d; });
+    if (iAdm >= 0 && antigas[iAdm] && !v.inicio) v.inicio = antigas[iAdm];
+    v.etapas = novas; n++;
+  });
+  S2.params.etapas = JSON.parse(JSON.stringify(alvo));
+  S2.params.etapasV = vNova;
+  return n;
+}
+
+/* Registro que chega de outra pessoa pode vir com a régua antiga. Aqui não dá
+   para consultar os nomes dela, então usamos o de-para posicional conhecido. */
+const DE_10_PARA_8 = [0, 1, 2, 5, 6, 7, -1, -1, -1, -1];
+function ajustarEtapasVaga(v){
+  if (!v) return;
+  const n = ((S.params && S.params.etapas) || []).length || 8;
+  if (!Array.isArray(v.etapas)) v.etapas = [];
+  if (v.etapas.length === 10 && n === 8){
+    const a = v.etapas.slice(), novas = Array(8).fill(null);
+    DE_10_PARA_8.forEach((j, i) => { if (j >= 0 && a[i] && !novas[j]) novas[j] = a[i]; });
+    if (a[9] && !v.inicio) v.inicio = a[9];
+    v.etapas = novas;
+    return;
+  }
+  while (v.etapas.length < n) v.etapas.push(null);
+  v.etapas.length = n;
+}
+
 /* ============================================================ CÁLCULO */
 const ABERTO = st => st && st!=='FECHADA' && st!=='CANCELADA' && st!=='CONGELADA';
 
 function calcVaga(v){
   const P = S.params, slaTot = Math.max(...P.etapas.map(e=>e.sla));
   const c = { slaTot };
-  c.aberta   = ABERTO(v.status);
-  c.admissao = v.etapas[9];
-  c.dias     = v.abertura ? (c.admissao ? difD(v.abertura, c.admissao) : desdeHoje(v.abertura)) : null;
+  const nEt = P.etapas.length;
+  c.aprovIdx = nEt - 1;
+  /* A régua de recrutamento termina na APROVAÇÃO. A data de admissão é um dado
+     da contratação — alimenta integração, experiência, contrato e uniforme —
+     mas não entra no SLA nem no aging. */
+  c.aprov    = v.etapas[nEt - 1] || null;
+  /* Aprovada é vaga encerrada: o aging para aqui, mesmo que o status ainda não
+     tenha sido mexido à mão. Mas ela só sai da lista "Em aberto" quando a data
+     de admissão também estiver preenchida — senão a linha some da tela bem na
+     hora em que falta justamente esse dado. */
+  c.encerrada = !!c.aprov || !ABERTO(v.status);
+  c.aberta   = ABERTO(v.status) && !(c.aprov && c.admissao);
+  c.admissao = v.inicio || null;
+  c.dias     = v.abertura ? (c.aprov ? difD(v.abertura, c.aprov) : desdeHoje(v.abertura)) : null;
   c.ttf      = (v.abertura && c.admissao) ? difD(v.abertura, c.admissao) : null;
-  c.tth      = (v.etapas[1] && v.etapas[7]) ? difD(v.etapas[1], v.etapas[7]) : null;
+  c.tth      = (v.etapas[1] && c.aprov) ? difD(v.etapas[1], c.aprov) : null;
 
   let ult = -1;
-  for (let i=0;i<10;i++) if (v.etapas[i]) ult = i;
+  for (let i=0;i<nEt;i++) if (v.etapas[i]) ult = i;
   c.etapaIdx  = ult;
   c.etapaNome = ult < 0 ? 'Requisição aberta' : P.etapas[ult].nome;
 
   const marcos = [v.abertura, ...v.etapas].filter(Boolean).map(parseD);
-  c.diasEtapa = (!v.abertura || c.admissao) ? (c.admissao ? 0 : null)
+  c.diasEtapa = (!v.abertura || c.aprov) ? (c.aprov ? 0 : null)
               : Math.round((HOJE - new Date(Math.max(...marcos))) / DIA);
 
   c.flags = P.etapas.map((e, i) => {
@@ -828,7 +902,7 @@ function calcVaga(v){
   c.statusSla = (!v.abertura || !v.medirSla) ? '' : (c.fora===0 ? 'DENTRO' : 'FORA');
 
   if (c.dias == null) c.farol = '';
-  else if (!c.aberta) c.farol = 'concluida';
+  else if (c.encerrada) c.farol = 'concluida';
   else if (c.dias <= slaTot*P.agingVerde) c.farol = 'saudavel';
   else if (c.dias <= slaTot*P.agingAmarelo) c.farol = 'atencao';
   else c.farol = 'critico';
@@ -1086,6 +1160,7 @@ function calcularFixas(linhas){
     ['cargo', larguraAuto(col(r => r.v.cargo), 150, 230)],
     ['substituido', larguraAuto(col(r => r.v.substituido), 140, 220)],
     ['aprovado', larguraAuto(col(r => r.v.aprovado), 140, 220)],
+    ['inicio', 122],
   ]);
 }
 function calcularFixasUni(linhas){
@@ -1188,34 +1263,35 @@ function renderVagas(){
     <span class="count">${linhas.length} de ${S.vagas.length}</span>
   </div>`;
 
-  const CURTO = ['Alinhamento','Divulgação','Triagem','Parecer','Ent. gestor','Aprovação',
-                 'Proposta','Aceite','Exame','Admissão'];
+  const CURTO = ['Alinhamento','Divulgação','Triagem CV RH','Triagem CV gestor',
+                 'Entrevista RH','Parecer','Entrevista gestor','Aprovação'];
+  const nEt = P.etapas.length;
   h += `<div class="grid-wrap"><table class="grid vag"><thead>
-    <tr><th class="grp a stG" colspan="6" style="left:0;width:${FX_LEFT._total}px">Identificação</th><th class="grp a" colspan="1"></th>
+    <tr><th class="grp a stG" colspan="7" style="left:0;width:${FX_LEFT._total}px">Identificação</th><th class="grp a" colspan="1"></th>
         <th class="grp c" colspan="5">Situação — automático</th>
-        <th class="grp b" colspan="10">Data de conclusão de cada etapa</th>
-        <th class="grp a" colspan="2">Resultado</th>
+        <th class="grp b" colspan="${nEt}">Data de conclusão de cada etapa</th>
+        <th class="grp a" colspan="1">Resultado</th>
         <th class="grp d" colspan="7">Detalhes</th></tr>
     <tr>${thOrd('vagas','id','ID','fx',fxEstilo('id'))}
         ${thOrd('vagas','status','Status','fx',fxEstilo('status'))}
         ${thOrd('vagas','empresa','Empresa','fx',fxEstilo('empresa'))}
         ${thOrd('vagas','cargo','Cargo','fx',fxEstilo('cargo'))}
         ${thOrd('vagas','substituido','Substituição','fx',fxEstilo('substituido'))}
-        ${thOrd('vagas','aprovado','Aprovação','fx fxfim',fxEstilo('aprovado'))}
+        ${thOrd('vagas','aprovado','Aprovado(a)','fx',fxEstilo('aprovado'))}
+        ${thOrd('vagas','inicio','Data de admissão','fx fxfim',fxEstilo('inicio'))}
         ${thOrd('vagas','abertura','Abertura','','min-width:118px')}
         ${thOrd('vagas','dias','Aging','','min-width:104px')}${thOrd('vagas','dias','Dias','n','min-width:52px')}
         ${thOrd('vagas','etapa','Etapa atual','','min-width:150px')}${thOrd('vagas','naetapa','Na etapa','n','min-width:60px')}
         ${thOrd('vagas','sla','SLA','','min-width:96px')}`;
   P.etapas.forEach((e, i) => h += `<th style="min-width:112px" title="${esc(e.nome)} — SLA ${e.sla} dias">${e.n}. ${esc(CURTO[i] || e.nome)}</th>`);
-  h += `${thOrd('vagas','inicio','Início previsto','','min-width:118px')}
-        ${thOrd('vagas','ttf','TTF','n','min-width:52px')}
+  h += `${thOrd('vagas','ttf','TTF','n','min-width:52px')}
         ${thOrd('vagas','tipo','Tipo','','min-width:150px')}${thOrd('vagas','depto','Departamento','','min-width:140px')}
         ${thOrd('vagas','gestor','Gestor','','min-width:120px')}${thOrd('vagas','salario','Salário','n','min-width:88px')}
         <th style="min-width:260px" title="Anotação livre sobre esta vaga">Observação</th>
         <th style="min-width:64px">Medir SLA</th><th style="min-width:34px"></th>
         </tr></thead><tbody>`;
 
-  if (!linhas.length) h += `<tr><td colspan="31"><div class="empty">Nenhuma vaga com esses filtros.</div></td></tr>`;
+  if (!linhas.length) h += `<tr><td colspan="${nEt + 21}"><div class="empty">Nenhuma vaga com esses filtros.</div></td></tr>`;
 
   linhas.forEach(({v,i,c}) => {
     const fk = {saudavel:'good', atencao:'warn', critico:'crit', concluida:'neut'}[c.farol] || 'neut';
@@ -1225,20 +1301,20 @@ function renderVagas(){
       <td ${fx('empresa')}>${cBase(i,'empresa',v.empresa,'empresas')}</td>
       <td ${fx('cargo')}>${cBase(i,'cargo',v.cargo,'cargos')}</td>
       <td ${fx('substituido')}>${cWrap(i,'substituido',v.substituido)}</td>
-      <td ${fx('aprovado','fxfim')}>${cWrap(i,'aprovado',v.aprovado)}</td>
+      <td ${fx('aprovado')}>${cWrap(i,'aprovado',v.aprovado)}</td>
+      <td ${fx('inicio','fxfim')}>${cDate(i,'inicio',v.inicio)}</td>
       <td>${cDate(i,'abertura',v.abertura)}</td>
       <td class="calc"><span class="pill ${fk}">${fl}</span></td>
       <td class="calc n">${c.dias==null?'':c.dias}</td>
       <td class="calc">${esc(c.etapaNome)}</td>
       <td class="calc n">${c.diasEtapa==null?'':c.diasEtapa}</td>
       <td class="calc">${c.statusSla ? `<span class="pill ${c.statusSla==='DENTRO'?'good':'crit'}">${c.statusSla==='DENTRO'?'Dentro':'Fora ('+c.fora+')'}</span>` : ''}</td>`;
-    for (let k=0;k<10;k++){
+    for (let k=0;k<nEt;k++){
       const f = c.flags[k];
       const bg = f==='ATRASADO' ? 'var(--crit-bg)' : f==='OK' ? 'var(--good-bg)' : '';
       h += `<td${bg?` style="background:${bg}"`:''}><input class="cell" type="date" data-i="${i}" data-et="${k}" value="${esc(v.etapas[k])}"></td>`;
     }
-    h += `<td>${cDate(i,'inicio',v.inicio)}</td>
-      <td class="calc n">${c.ttf==null?'':c.ttf}</td>
+    h += `<td class="calc n">${c.ttf==null?'':c.ttf}</td>
       <td>${cBase(i,'tipo',v.tipo,'tipoVaga')}</td>
       <td>${cBase(i,'depto',v.depto,'departamentos')}</td>
       <td>${cBase(i,'gestor',v.gestor,'gestores')}</td>
@@ -2229,16 +2305,23 @@ function idxTarefaIntegracao(){
 const ESPELHADOS = ['inicio','aprovado','empresa','cargo','depto','gestor','tipo'];
 const VAGA_FECHADA = st => !!st && (/FECHAD|CONCLU|ADMITID|CONTRATAD/i.test(st)
   || COR_STATUS_VAGA[st] === 's-good');
+/* Vaga aprovada é vaga que virou contratação. Preencheu a data da última etapa
+   (Aprovação) — ou fechou a vaga pelo status — e a admissão nasce sozinha. */
+function vagaAprovada(v){
+  if (!v) return false;
+  const n = (S.params.etapas || []).length;
+  return !!(n && Array.isArray(v.etapas) && v.etapas[n - 1]) || VAGA_FECHADA(v.status);
+}
 function sincronizarAdmissao(vaga){
   const alvos = vaga ? [vaga] : S.vagas;
   const criados = [];
   alvos.forEach(v => {
-    if (!v || !VAGA_FECHADA(v.status)) return;
+    if (!vagaAprovada(v)) return;
     if (S.admissao.some(a => a.idVaga === v.id)) return;
     S.admissao.unshift({
       id: proxId('admissao','A'), idVaga: v.id,
       itens: S.listas.checklist.map(() => 'NÃO'),
-      obs: 'Aberta automaticamente ao fechar a vaga ' + v.id,
+      obs: 'Aberta automaticamente na aprovação da vaga ' + v.id,
     });
     criados.push(v.aprovado || v.cargo || v.id);
   });
@@ -2554,6 +2637,19 @@ function compromissos(){
           marca: v.id, nota: 'etapa ' + (k+1) + ' de ' + P.etapas.length,
           modo:'data', rotuloAcao:'Data em que esta etapa foi concluída',
           alvo:{col:'vagas', id:v.id, campo:'etapas', idx:k} });
+  });
+
+  /* aprovada e sem data de admissão: enquanto ela não vier, a integração, o
+     período de experiência e o uniforme dessa pessoa não têm prazo nenhum */
+  (S.vagas || []).forEach(v => {
+    const nE = P.etapas.length;
+    if (!nE || !Array.isArray(v.etapas) || !v.etapas[nE - 1] || v.inicio) return;
+    pôr({ tipo:'vaga', data: v.etapas[nE - 1], aba:'vagas',
+          titulo:'Informar a data de admissão',
+          quem: [v.aprovado || v.cargo, v.empresa].filter(Boolean).join(' · ') || v.id,
+          marca: v.id, nota:'sem ela a integração e o uniforme ficam sem prazo',
+          modo:'data', rotuloAcao:'Data de admissão',
+          alvo:{col:'vagas', id:v.id, campo:'inicio'} });
   });
 
   /* período de experiência: prazo legal, em dias corridos */
@@ -3420,7 +3516,7 @@ function proxId(col, pref){
 function novaVaga(){
   S.vagas.unshift({ id: proxId('vagas','V'), empresa:'', cargo:'', depto:'', tipo:'', substituido:'',
     gestor:'', salario:null, abertura: iso(HOJE), status:'TRIAR', prioridade:'',
-    etapas: Array(10).fill(null), aprovado:'', inicio:null, talent:'', medirSla:true, obs:'' });
+    etapas: Array((S.params.etapas||[]).length || 8).fill(null), aprovado:'', inicio:null, talent:'', medirSla:true, obs:'' });
   ui.vFiltro='abertas'; ui.vBusca=''; ui.emp.vagas=''; marcarSujo(); render();
   toast('Vaga criada — preencha empresa e cargo');
 }
@@ -4272,7 +4368,7 @@ function tabelaCSV(){
          u.camisa, u.calca, u.entregue, fmtD(u.dataEntrega), u.obs, u.idVaga])]];
     default: return ['vagas',
       [['ID','Empresa','Cargo','Departamento','Tipo','Gestor','Salário','Abertura',
-        ...P.etapas.map(e => e.n+'. '+e.nome), 'Status','Candidato aprovado','Início previsto',
+        ...P.etapas.map(e => e.n+'. '+e.nome), 'Status','Candidato aprovado','Data de admissão',
         'Dias em aberto','Time to Fill','Time to Hire','Etapa atual','Dias na etapa','Aging',
         'Etapas fora do SLA','Status SLA','Medir SLA','Observações'],
        ...S.vagas.map(v => { const c = calcVaga(v);
@@ -5048,6 +5144,7 @@ function aplicarPacote(){
     }
     p.novos.forEach(r => S[col].unshift(r));
   });
+  (S.vagas || []).forEach(ajustarEtapasVaga);
   escolhidos.forEach(c => {
     if (c.apagar){ S[c.col] = S[c.col].filter(r => r.id !== c.aqui.id); return; }
     const i = S[c.col].findIndex(r => r.id === c.pkg.id);
@@ -5097,7 +5194,7 @@ function sincLocal(){
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 9;
+const VERSAO_APP = 10;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
@@ -5288,7 +5385,9 @@ async function puxar(silencioso){
 function fundirParams(remotos){
   if (!remotos || !BASE_PARAMS) return 0;
   let n = 0;
+  const reguaVelha = (remotos.etapasV || 0) < (S.params.etapasV || 0);
   Object.keys(remotos).forEach(k => {
+    if (reguaVelha && (k === 'etapas' || k === 'etapasV')) return;
     const meu = JSON.stringify(S.params[k]);
     const partida = JSON.stringify(BASE_PARAMS[k]);
     const dela = JSON.stringify(remotos[k]);
@@ -5330,6 +5429,7 @@ function aplicarDoRemoto(d){
     }
     p.novos.forEach(r => S[col].unshift(r));
   });
+  (S.vagas || []).forEach(ajustarEtapasVaga);
   d.listasNovas.forEach(([k, v]) => {
     if (!Array.isArray(S.listas[k])) S.listas[k] = [];
     if (!S.listas[k].includes(v)) S.listas[k].push(v);
@@ -5512,6 +5612,10 @@ function normalizar(d, semente){
   S2.params = Object.assign({}, semente.params, (d && d.params) || {});
   if (!Array.isArray(S2.params.etapas) || !S2.params.etapas.length) S2.params.etapas = semente.params.etapas;
   S2.params.etapas = S2.params.etapas.slice().sort((a,b) => a.n - b.n);
+  /* a versão da régua é a que ESTAVA salva, não a da semente — senão a
+     migração nunca se reconhece como necessária */
+  S2.params.etapasV = (d && d.params && d.params.etapasV) || 0;
+  migrarEtapas(S2, semente);
   S2.listas = Object.assign({}, semente.listas, (d && d.listas) || {});
   Object.keys(semente.listas).forEach(k => { if (!Array.isArray(S2.listas[k])) S2.listas[k] = semente.listas[k].slice(); });
   COLECOES.forEach(k => { if (!Array.isArray(S2[k])) S2[k] = (semente[k] || []).slice(); });
