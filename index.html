@@ -3058,15 +3058,40 @@ const COLECAO = { vagas:'vagas', candidatos:'candidatos', experiencia:'experienc
   admissao:'admissao', integracao:'integracao', contratos:'contratos', uniformes:'uniformes' };
 function colecaoAtual(){ return COLECAO[ui.tab]; }
 
+/* Buscar sem perder a mão. Redesenhar a aba recria a caixa de busca, e a caixa
+   nova nasce com o cursor no comeco — era impossível digitar a segunda letra.
+   Agora esperamos a pessoa parar de digitar, guardamos onde o cursor estava e
+   devolvemos ele ao mesmo lugar na caixa nova. */
+let relogioFiltro = null;
+function buscando(id, atribuir, redesenha){
+  clearTimeout(relogioFiltro);
+  relogioFiltro = setTimeout(() => {
+    const antes = document.getElementById(id);
+    if (!antes) return;
+    const pos = antes.selectionStart, texto = antes.value;
+    atribuir(texto);
+    redesenha();
+    const depois = document.getElementById(id);
+    if (!depois) return;
+    if (depois.value !== texto) depois.value = texto;
+    depois.focus();
+    try { depois.setSelectionRange(pos, pos); } catch (e) {}
+  }, 180);
+}
+
+const BUSCAS = [
+  ['v-busca', v => ui.vBusca = v, () => renderVagas()],
+  ['c-busca', v => ui.cBusca = v, () => renderCandidatos()],
+  ['e-busca', v => ui.eBusca = v, () => renderExperiencia()],
+  ['a-busca', v => ui.aBusca = v, () => renderAdmissao()],
+  ['i-busca', v => ui.iBusca = v, () => renderIntegracao()],
+  ['k-busca', v => ui.kBusca = v, () => renderContratos()],
+  ['u-busca', v => ui.uBusca = v, () => renderUniformes()],
+];
 document.addEventListener('input', ev => {
   const t = ev.target;
-  if (t.matches('#v-busca')){ ui.vBusca = t.value; renderVagas(); document.getElementById('v-busca').focus(); return; }
-  if (t.matches('#c-busca')){ ui.cBusca = t.value; renderCandidatos(); document.getElementById('c-busca').focus(); return; }
-  if (t.matches('#e-busca')){ ui.eBusca = t.value; renderExperiencia(); document.getElementById('e-busca').focus(); return; }
-  if (t.matches('#a-busca')){ ui.aBusca = t.value; renderAdmissao(); document.getElementById('a-busca').focus(); return; }
-  if (t.matches('#i-busca')){ ui.iBusca = t.value; renderIntegracao(); document.getElementById('i-busca').focus(); return; }
-  if (t.matches('#k-busca')){ ui.kBusca = t.value; renderContratos(); document.getElementById('k-busca').focus(); return; }
-  if (t.matches('#u-busca')){ ui.uBusca = t.value; renderUniformes(); document.getElementById('u-busca').focus(); return; }
+  const b = BUSCAS.find(([id]) => t.matches('#' + id));
+  if (b){ buscando(b[0], b[1], b[2]); return; }
 });
 
 document.addEventListener('change', ev => {
@@ -5194,7 +5219,7 @@ function sincLocal(){
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 10;
+const VERSAO_APP = 11;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
