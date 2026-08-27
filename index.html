@@ -2544,7 +2544,9 @@ function compromissos(){
     pôr({ tipo:'vaga', data: somarDiasUteis(v.abertura, P.etapas[k].sla), aba:'vagas',
           titulo: P.etapas[k].nome,
           quem: [v.cargo, v.empresa].filter(Boolean).join(' · ') || v.id,
-          marca: v.id, nota: 'etapa ' + (k+1) + ' de ' + P.etapas.length });
+          marca: v.id, nota: 'etapa ' + (k+1) + ' de ' + P.etapas.length,
+          modo:'data', rotuloAcao:'Data em que esta etapa foi concluída',
+          alvo:{col:'vagas', id:v.id, campo:'etapas', idx:k} });
   });
 
   /* período de experiência: prazo legal, em dias corridos */
@@ -2553,10 +2555,14 @@ function compromissos(){
     const c = calcExp(e);
     if (!e.prorrog) pôr({ tipo:'experiencia', data:c.lim1, aba:'experiencia', corridos:true,
       titulo:'Decidir prorrogação — ' + P.expP1 + ' dias', quem:e.nome || '(sem nome)',
-      marca:e.empresa || '', nota:'dias corridos' });
+      marca:e.empresa || '', nota:'dias corridos',
+      modo:'simnao', pergunta:'Prorrogar o período de experiência desta pessoa?',
+      alvo:{col:'experiencia', id:e.id, campo:'prorrog'} });
     if (!e.efetiv && !c.semSegundo) pôr({ tipo:'experiencia', data:c.lim2, aba:'experiencia', corridos:true,
       titulo:'Decidir efetivação — ' + P.expP2 + ' dias', quem:e.nome || '(sem nome)',
-      marca:e.empresa || '', nota:'dias corridos' });
+      marca:e.empresa || '', nota:'dias corridos',
+      modo:'simnao', pergunta:'Efetivar esta pessoa?',
+      alvo:{col:'experiencia', id:e.id, campo:'efetiv'} });
   });
 
   /* contrato de estágio: devolução dentro do SLA do CIEE */
@@ -2564,26 +2570,33 @@ function compromissos(){
     if (!k.solic || k.retorno) return;
     pôr({ tipo:'contrato', data: calcContrato(k).limite, aba:'contratos',
       titulo:'Retorno do contrato assinado', quem:k.nome || '(sem nome)',
-      marca:k.faculdade || '', nota:'CIEE' });
+      marca:k.faculdade || '', nota:'CIEE',
+      modo:'data', rotuloAcao:'Data em que o contrato voltou',
+      alvo:{col:'contratos', id:k.id, campo:'retorno'} });
   });
 
   /* integração e uniforme: têm a admissão como data-alvo */
   (S.integracao || []).forEach(g => {
     if (g.feito === 'SIM' || !g.admissao) return;
     pôr({ tipo:'integracao', data:g.admissao, aba:'integracao',
-      titulo:'Integração pendente', quem:g.nome || '(sem nome)', marca:g.empresa || '' });
+      titulo:'Integração pendente', quem:g.nome || '(sem nome)', marca:g.empresa || '',
+      modo:'data', rotuloAcao:'Data em que a integração foi feita',
+      alvo:{col:'integracao', id:g.id, campo:'dataIntegr', junto:['feito','SIM']} });
   });
   (S.uniformes || []).forEach(u => {
     if (u.entregue === 'SIM' || !u.admissao) return;
     pôr({ tipo:'uniforme', data:u.admissao, aba:'uniformes',
-      titulo:'Entregar uniforme até a admissão', quem:u.nome || '(sem nome)', marca:u.empresa || '' });
+      titulo:'Entregar uniforme até a admissão', quem:u.nome || '(sem nome)', marca:u.empresa || '',
+      modo:'data', rotuloAcao:'Data da entrega',
+      alvo:{col:'uniformes', id:u.id, campo:'dataEntrega', junto:['entregue','SIM']} });
   });
 
   /* anotações rápidas com data de lembrete */
   (S.notas || []).forEach(n => {
     if (n.feito || !n.quando) return;
     pôr({ tipo:'nota', data:n.quando, aba:'vagas',
-      titulo:n.texto || '(anotação sem texto)', quem:'', marca:n.idVaga || '' });
+      titulo:n.texto || '(anotação sem texto)', quem:'', marca:n.idVaga || '',
+      modo:'feito', alvo:{col:'notas', id:n.id} });
   });
 
   return fora.sort((a, b) => a.data < b.data ? -1 : a.data > b.data ? 1 : 0);
@@ -2600,14 +2613,68 @@ function calPrazo(c){
   if (c.faltam === 0) return 'vence hoje';
   return 'faltam ' + c.faltam + u;
 }
-function calLinha(c){
+function calLinha(c, i){
   const fk = c.bucket === 'atrasado' ? 'crit' : (c.bucket === 'hoje' || c.bucket === 'amanha') ? 'warn' : 'neut';
-  return `<button class="calrow" data-calir="${esc(c.aba)}">
+  return `<button class="calrow" data-cal="${i}">
     <span class="caldata">${fmtD(c.data)}</span>
     <span class="caltipo t-${c.tipo}">${esc(CAL_ROTULO[c.tipo])}</span>
     <span class="caltit">${esc(c.titulo)}${c.quem ? ` <span class="calquem">· ${esc(c.quem)}</span>` : ''}</span>
     <span class="calmarca">${esc(c.marca || '')}</span>
     <span class="pill ${fk}">${esc(calPrazo(c))}</span></button>`;
+}
+
+let CAL_ITENS = [];
+/* Resolver o compromisso sem sair da lista: a pessoa clica, põe a data (ou
+   responde sim/não) e aquilo sai do radar na hora. Ir até a aba continua
+   disponível, para quando ela precisa do registro inteiro. */
+function telaCompromisso(i){
+  const c = CAL_ITENS[i];
+  if (!c) return;
+  const el = document.getElementById('modal');
+  el.innerHTML = `<div class="modal-box cvbox" role="dialog" aria-modal="true">
+    <h3>${esc(c.titulo)}</h3>
+    <div class="cvcorpo">
+      <div class="hint"><b>${esc(CAL_ROTULO[c.tipo])}</b>${c.quem ? ' · ' + esc(c.quem) : ''}${c.marca ? ' · ' + esc(c.marca) : ''}<br>
+        Previsto para <b>${fmtD(c.data)}</b> — ${esc(calPrazo(c))}${c.nota ? ' · ' + esc(c.nota) : ''}</div>
+      ${c.modo === 'data' ? `<label class="cvlab">${esc(c.rotuloAcao || 'Data em que foi feito')}</label>
+        <input type="date" id="cp-data" value="${esc(iso(HOJE))}">
+        <div class="hint">Ao confirmar, a data entra no registro e este item sai do calendário.</div>` : ''}
+      ${c.modo === 'simnao' ? `<div class="hint" style="margin-top:12px">${esc(c.pergunta || '')}
+        A resposta vai para a aba Experiência e tira este item do calendário.</div>` : ''}
+      ${c.modo === 'feito' ? `<div class="hint" style="margin-top:12px">Marcar esta anotação como resolvida.
+        Ela sai do calendário e some da lista de lembretes.</div>` : ''}
+    </div>
+    <div class="modal-acts">
+      <button data-conf="0">Fechar</button>
+      <button class="sm" data-calir="${esc(c.aba)}">Abrir a aba</button>
+      ${c.modo === 'simnao'
+        ? `<button class="sm" data-cpsn="${i}" data-v="NÃO">Não</button>
+           <button class="danger" data-cpsn="${i}" data-v="SIM">Sim</button>`
+        : `<button class="danger" data-cpok="${i}">${c.modo === 'feito' ? 'Marcar como resolvida' : 'Concluir'}</button>`}
+    </div></div>`;
+  el.hidden = false;
+  const d = document.getElementById('cp-data');
+  if (d) d.focus();
+}
+function resolverCompromisso(i, valor){
+  const c = CAL_ITENS[i];
+  if (!c || !c.alvo) return;
+  const r = (S[c.alvo.col] || []).find(x => x.id === c.alvo.id);
+  if (!r){ toast('Não achei mais esse registro — talvez alguém o tenha apagado.'); fecharModal(0); return; }
+  if (c.modo === 'feito') r.feito = true;
+  else if (c.modo === 'simnao') r[c.alvo.campo] = valor;
+  else {
+    if (c.alvo.campo === 'etapas'){ r.etapas[c.alvo.idx] = valor || null; }
+    else r[c.alvo.campo] = valor || null;
+    if (c.alvo.junto) r[c.alvo.junto[0]] = c.alvo.junto[1];
+  }
+  let extra = '';
+  if (c.alvo.col === 'vagas'){
+    const novos = propagarVaga(r);
+    if (novos.length) extra = ' — ' + novos[0] + ' entrou na Admissão e nos controles seguintes';
+  }
+  marcarSujo(); fecharModal(0); render();
+  toast('Resolvido: ' + c.titulo + (c.quem ? ' · ' + c.quem : '') + extra);
 }
 
 function calGradeMes(itens){
@@ -2634,7 +2701,7 @@ function calGradeMes(itens){
     h += `<div class="calcel${doMes ? '' : ' fora'}${dia === iso(HOJE) ? ' hoje' : ''}${atrasado ? ' temAtraso' : ''}">
       <div class="caldia">${cursor.getDate()}</div>
       ${doDia.slice(0, 4).map(c => `<button class="calchip t-${c.tipo}${c.bucket==='atrasado'?' atras':''}"
-          data-calir="${esc(c.aba)}" title="${esc(c.titulo + (c.quem ? ' · ' + c.quem : '') + ' — ' + calPrazo(c))}"
+          data-cal="${itens.indexOf(c)}" title="${esc(c.titulo + (c.quem ? ' · ' + c.quem : '') + ' — ' + calPrazo(c))}"
         >${esc(c.quem || c.titulo)}</button>`).join('')}
       ${doDia.length > 4 ? `<div class="calmais">+${doDia.length - 4}</div>` : ''}</div>`;
     cursor.setDate(cursor.getDate() + 1);
@@ -2646,6 +2713,7 @@ function calGradeMes(itens){
 function renderCalendario(){
   const todos = compromissos();
   const itens = calFiltrados();
+  CAL_ITENS = itens;
   const vista = ui.calVista || 'lista';
   const conta = t => todos.filter(c => c.tipo === t).length;
   const atrasados = itens.filter(c => c.bucket === 'atrasado').length;
@@ -2663,7 +2731,8 @@ function renderCalendario(){
   <div class="hint" style="margin-bottom:14px">Aqui está o que <b>ainda não foi feito</b>, na data em que
     deveria estar pronto. Etapas de vaga e contrato CIEE contam <b>dias úteis</b> — fim de semana e os
     feriados da Base ficam de fora. Os 45 e 90 dias de experiência contam <b>dias corridos</b>, porque
-    é assim que o prazo legal conta. Clique em qualquer linha para ir até o registro.</div>`;
+    é assim que o prazo legal conta. <b>Clique em qualquer linha para resolver ali mesmo</b> —
+    põe a data e o item sai do radar.</div>`;
 
   if (!itens.length){
     h += `<div class="empty">Nada pendente com data. Assim que houver vaga aberta com data de abertura,
@@ -2684,7 +2753,7 @@ function renderCalendario(){
       const doBalde = itens.filter(c => c.bucket === k);
       if (!doBalde.length) return;
       h += `<div class="calgrupo"><h3 class="calh ${k}">${nome} <span class="listcount">${doBalde.length}</span></h3>
-        <div class="callista">${doBalde.map(calLinha).join('')}</div></div>`;
+        <div class="callista">${doBalde.map(c => calLinha(c, itens.indexOf(c))).join('')}</div></div>`;
     });
   }
   document.getElementById('p-calendario').innerHTML = h;
@@ -3213,7 +3282,13 @@ document.addEventListener('click', async ev => {
     }
     renderCalendario(); return;
   }
-  if (t.dataset.calir !== undefined){ ui.tab = t.dataset.calir; render(); window.scrollTo(0,0); return; }
+  if (t.dataset.cal !== undefined){ telaCompromisso(+t.dataset.cal); return; }
+  if (t.dataset.cpok !== undefined){
+    const d = document.getElementById('cp-data');
+    resolverCompromisso(+t.dataset.cpok, d ? d.value : null); return;
+  }
+  if (t.dataset.cpsn !== undefined){ resolverCompromisso(+t.dataset.cpsn, t.dataset.v); return; }
+  if (t.dataset.calir !== undefined){ fecharModal(0); ui.tab = t.dataset.calir; render(); window.scrollTo(0,0); return; }
   if (t.id==='n-add'){ novaAnotacao(); return; }
   if (t.id==='p-zerar'){
     const q = COLECOES.reduce((n,c) => n + (S[c]||[]).length, 0);
@@ -4996,7 +5071,7 @@ function sincLocal(){
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 7;
+const VERSAO_APP = 8;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
