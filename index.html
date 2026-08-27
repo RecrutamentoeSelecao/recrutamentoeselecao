@@ -4332,19 +4332,21 @@ function telaPortao(aviso){
 }
 /* Depois de configurar repositório e token, busca o cofre e passa a bola
    para a tela de senha. Chamado pela própria tela de sincronização. */
-async function portaoTentar(){
+async function portaoTentar(quieto){
   const er = document.getElementById('cad-erro');
   if (er) er.textContent = 'Buscando a base…';
+  const falhou = msg => { if (!quieto) telaPortao(msg); return false; };
   try {
     const r = await baixarDoGit();
-    if (r.vazio) return telaPortao('O repositório está ligado, mas ainda não tem nada gravado. Peça para a administradora salvar uma vez.');
+    if (r.vazio) return falhou('O repositório está ligado, mas ainda não tem nada gravado. Peça para a administradora salvar uma vez.');
     const pac = JSON.parse(r.texto);
-    if (!ehCofre(pac)) return telaPortao('O arquivo do repositório não está protegido por senha. Peça para a administradora definir as senhas e salvar.');
+    if (!ehCofre(pac)) return falhou('O arquivo do repositório não está protegido por senha. Peça para a administradora definir as senhas e salvar.');
     shaRemoto = r.sha;
     document.getElementById('cadeado').innerHTML = '';
     pedirSenha(pac);
+    return true;
   } catch (e){
-    telaPortao('Não deu para buscar: ' + (erroDeRede(e) || e.message || e));
+    return falhou('Não deu para buscar: ' + (erroDeRede(e) || e.message || e));
   }
 }
 
@@ -4977,11 +4979,24 @@ function aplicarPacote(){
    O token fica no navegador de cada uma, nunca no repositório nem na página. */
 
 const CHAVE_TOKEN = 'fagron-rs-token';
+/* O endereço do repositório mora dentro do arquivo cifrado — ou seja, só é
+   conhecido DEPOIS da senha. Mas a tela de entrada precisa dele ANTES, para
+   buscar quem tem acesso. Então ele também fica aqui, ao lado do token, que
+   é por navegador de qualquer jeito. Nome de repositório não é segredo. */
+const CHAVE_SINC = 'fagron-rs-sinc';
+function guardarSincLocal(c){
+  try { localStorage.setItem(CHAVE_SINC, JSON.stringify({repo:c.repo, arquivo:c.arquivo, branch:c.branch})); }
+  catch (e) { /* navegador sem storage */ }
+}
+function sincLocal(){
+  try { const c = JSON.parse(localStorage.getItem(CHAVE_SINC) || 'null'); return (c && c.repo) ? c : null; }
+  catch (e) { return null; }
+}
 /* Número da versão do PROGRAMA (não dos dados). Sobe a cada entrega que muda
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 6;
+const VERSAO_APP = 7;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
@@ -5318,6 +5333,7 @@ function guardarSinc(){
     er.hidden = false; er.innerHTML = 'O repositório precisa vir como <b>usuario/repositorio</b>.'; return;
   }
   S.params.sinc = {repo: f.repo, arquivo: f.arquivo, branch: f.branch};
+  guardarSincLocal(S.params.sinc);
   if (f.token && !pareceToken(f.token)){
     er.hidden = false; er.innerHTML = esc(TEXTO_TOKEN_TORTO); return;
   }
@@ -5497,25 +5513,39 @@ async function iniciar(){
     const r = await fetch('dados.json', {cache:'no-store'});
     if (r.ok) dados = await r.json();
   } catch (e) { /* primeira versão ainda não tem o arquivo */ }
-  if (ehCofre(dados)){ pedirSenha(dados); return; }   /* trancado: nada é montado antes da senha */
-
   const semente = JSON.parse(document.getElementById('semente').textContent);
+  /* fora da versão publicada não há repositório para consultar */
+  if (!semente.trancado && ehCofre(dados)){ pedirSenha(dados); return; }
   /* A página publicada não carrega dado nenhum: quem abrir o endereço sem
      credencial não vê nem a Base. Tudo vem do repositório privado, depois
      de a pessoa dizer quem é. */
   if (semente.trancado){
     TRANCADO = true;
-    S = normalizar(dados, semente);
+    S = normalizar(ehCofre(dados) ? null : dados, semente);
+    /* configuração deste navegador vence a que veio embutida na página */
+    const cLocal = sincLocal();
+    if (cLocal) S.params.sinc = Object.assign({}, S.params.sinc, cLocal);
     BASE = assinarTudo(S);
     api = await (window.claude && window.claude.use ? window.claude.use('artifact') : null);
     podeSalvar = !!api;
-    /* trabalho deixado neste navegador tem prioridade sobre a rede */
+    /* A LISTA DE PESSOAS VEM DO REPOSITÓRIO, não da cópia deste navegador.
+       A cópia local envelhece: quem entrasse por ela via a equipe de dias
+       atrás, mesmo com o sistema atualizado. Ela continua servindo de plano B
+       quando a rede falha, e o trabalho não gravado é recuperado logo depois,
+       na tela de senha. */
+    if (sincLigada() && await portaoTentar(true)) return;
+    if (ehCofre(dados)){
+      pedirSenha(dados, 'Não consegui falar com o repositório agora — entrando pela cópia deste navegador.');
+      return;
+    }
     const loc = lerLocal();
     if (loc && loc.carga){
-      try { const p = JSON.parse(loc.carga); if (ehCofre(p)){ pedirSenha(p); return; } } catch (e) { /* segue */ }
+      try { const p = JSON.parse(loc.carga); if (ehCofre(p)){
+        pedirSenha(p, 'Não consegui falar com o repositório agora — entrando pela cópia deste navegador.'); return; } }
+      catch (e) { /* segue */ }
     }
-    if (sincLigada()){ await portaoTentar(); return; }
-    telaPortao();
+    if (sincLigada()) await portaoTentar();
+    else telaPortao();
     return;
   }
   arrancar(dados);
