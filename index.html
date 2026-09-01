@@ -2250,7 +2250,7 @@ function renderUniformes(){
      o navegador ignora a largura posta em cada <th> e reparte tudo por igual —
      era por isso que Função e Setor ficavam apertadas. */
   h += `<div class="grid-wrap sem-rolagem"><table class="grid uni cabe">
-    <colgroup>${['8.5%','11%','7%','6.5%','13%','10%','6%','7%','6.5%','8%','4%','3.5%','3.5%','4%','1.5%']
+    <colgroup>${['8.5%','11%','6.5%','6.5%','15%','11%','6%','7%','6.5%','6.5%','3.5%','3%','3%','4.5%','1.5%']
       .map(w => `<col style="width:${w}">`).join('')}</colgroup><thead>
     <tr><th class="grp a stG" colspan="2">Identificação</th>
         <th class="grp c" colspan="6">Vem da admissão</th>
@@ -5251,7 +5251,7 @@ function sincLocal(){
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 12;
+const VERSAO_APP = 13;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
