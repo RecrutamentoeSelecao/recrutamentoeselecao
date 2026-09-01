@@ -249,6 +249,18 @@ table.grid tr:hover td.sticky1, table.grid tr:hover td.sticky2{background:var(--
 input.cell[type=number]{font-family:var(--fonte); text-align:right}
 select.cell{font-family:var(--fonte); font-size:11px; appearance:none;
   background-image:none; cursor:pointer}
+/* Menu da Base que mostra o nome inteiro. Nenhum navegador quebra linha dentro
+   de um <select> fechado — então o texto fica num bloco que quebra à vontade e
+   o <select> vem por cima, transparente, só para abrir a lista. */
+.selq{position:relative; background:var(--edit); min-height:26px}
+.selq .selq-txt{display:block; padding:5px 15px 5px 8px; font-size:12px; line-height:1.2;
+  white-space:normal; overflow-wrap:break-word; text-transform:uppercase}
+.selq .selq-txt.vazio{color:var(--ink-faint)}
+.selq::after{content:'▾'; position:absolute; right:4px; top:5px; font-size:9px;
+  color:var(--ink-faint); pointer-events:none}
+.selq select{position:absolute; inset:0; width:100%; height:100%; opacity:0;
+  border:0; padding:0; margin:0; cursor:pointer}
+.selq:focus-within{outline:2px solid var(--accent); outline-offset:-2px; background:var(--edit-focus)}
 .rowbtn{border:0; background:none; color:var(--ink-faint); font-size:14px; padding:2px 7px; line-height:1}
 .rowbtn:hover{background:var(--crit-bg); color:var(--crit)}
 .idcell{padding:5px 8px; font-family:var(--fonte); font-size:10.5px;
@@ -630,18 +642,21 @@ table.folha-tab td:nth-child(8),table.folha-tab td:nth-child(9){white-space:nowr
 
 /* ---- aba que precisa caber inteira na tela, para virar print ---- */
 .grid-wrap.sem-rolagem{overflow:visible}
-table.grid.cabe{table-layout:fixed; width:100%; min-width:0; font-size:11.5px}
+table.grid.cabe{table-layout:fixed; width:100%; min-width:0; font-size:10px}
 table.grid.cabe th{font-size:9.5px; letter-spacing:.04em; white-space:normal; line-height:1.25;
   padding:6px 5px; vertical-align:bottom; min-width:0}
 table.grid.cabe td{padding:0; min-width:0; overflow:hidden}
-table.grid.cabe .cell{font-size:11.5px; padding:5px 6px; width:100%; min-width:0;
+table.grid.cabe .cell{font-size:10px; padding:4px 5px; width:100%; min-width:0;
   text-overflow:ellipsis; border-radius:0}
 table.grid.cabe .cell.wrap{white-space:normal; word-break:break-word; line-height:1.3}
-table.grid.cabe input.cell[type=date]{font-size:10px; padding:5px 2px; letter-spacing:-.02em}
+table.grid.cabe input.cell[type=date]{font-size:10px; padding:4px 2px; letter-spacing:-.02em}
 table.grid.cabe select.cell{padding-right:6px; background-image:none}
 table.grid.cabe .rowbtn{padding:2px 5px; font-size:11px}
+table.grid.cabe .selq{min-height:22px}
+table.grid.cabe .selq .selq-txt{font-size:10px; padding:4px 13px 4px 5px; line-height:1.2}
+table.grid.cabe .selq::after{top:4px}
 @media (max-width:900px){
-  table.grid.cabe{font-size:10.5px}
+  table.grid.cabe{font-size:9.5px}
   table.grid.cabe input.cell[type=date]{font-size:9px}
 }
 
@@ -1085,6 +1100,17 @@ const cSel  = (i,f,v,l,z,ord) => `<select class="cell" data-i="${i}" data-f="${f
 const cBase = (i,f,v,lk) => `<select class="cell sel-base" data-i="${i}" data-f="${f}" data-base="${lk}"${
   v ? ` title="${esc(v)}"` : ''}>${
   opts(S.listas[lk] || [], v, '—')}<option value="__novo__">＋ cadastrar novo…</option></select>`;
+/* O mesmo menu da Base, mas mostrando o nome inteiro em várias linhas —
+   para colunas estreitas onde a função ou o setor não cabem numa linha só. */
+const envolver = (v, dentro) => `<div class="selq"${v ? ` title="${esc(v)}"` : ''}>` +
+  `<span class="selq-txt${v ? '' : ' vazio'}">${esc(v || '—')}</span>` + dentro + `</div>`;
+const cBaseQ = (i,f,v,lk) => envolver(v,
+  `<select class="cell sel-base" data-i="${i}" data-f="${f}" data-base="${lk}">` +
+  opts(S.listas[lk] || [], v, '—') +
+  `<option value="__novo__">＋ cadastrar novo…</option></select>`);
+/* o mesmo para os menus de lista fixa (tipo de vaga, sim/não…) */
+const cSelQ = (i,f,v,l,z,ord) => envolver(v,
+  `<select class="cell" data-i="${i}" data-f="${f}">${opts(l,v,z,ord)}</select>`);
 /* campo livre com sugestões da Base — aceita valor novo, que a aba Base sinaliza depois */
 const cLista = (i,f,v,lk) => `<input class="cell" list="dl-${lk}" data-i="${i}" data-f="${f}" value="${esc(v)}">`;
 /* Célula de texto que quebra em várias linhas — nome longo nunca fica cortado.
@@ -2219,21 +2245,27 @@ function renderUniformes(){
   /* Esta aba é feita para ser fotografada inteira: nada de rolagem lateral.
      A tabela é proporcional, os títulos quebram em duas linhas e os campos
      encolhem junto. Cada célula guarda o valor completo no title. */
-  h += `<div class="grid-wrap sem-rolagem"><table class="grid uni cabe"><thead>
+  /* Tabela de largura fixa: quem manda na largura das colunas é o <colgroup>.
+     A primeira linha do cabeçalho tem células agrupadas (colspan), e com elas
+     o navegador ignora a largura posta em cada <th> e reparte tudo por igual —
+     era por isso que Função e Setor ficavam apertadas. */
+  h += `<div class="grid-wrap sem-rolagem"><table class="grid uni cabe">
+    <colgroup>${['8.5%','11%','7%','6.5%','13%','10%','6%','7%','6.5%','8%','4%','3.5%','3.5%','4%','1.5%']
+      .map(w => `<col style="width:${w}">`).join('')}</colgroup><thead>
     <tr><th class="grp a stG" colspan="2">Identificação</th>
         <th class="grp c" colspan="6">Vem da admissão</th>
         <th class="grp b" colspan="4">Preencher</th>
         <th class="grp d" colspan="2">Entrega</th></tr>
     <tr>${thOrd('uniformes','empresa','Empresa','','width:9%')}
         ${thOrd('uniformes','nome','Colaborador','','width:14%')}
-        ${thOrd('uniformes','vaga','Vaga','','width:7.5%')}
+        ${thOrd('uniformes','vaga','Vaga','','width:6.5%')}
         ${thOrd('uniformes','admissao','Admissão','','width:7%')}
-        ${thOrd('uniformes','cargo','Função','','width:12%')}
-        ${thOrd('uniformes','setor','Setor','','width:9%')}
+        ${thOrd('uniformes','cargo','Função','','width:15%')}
+        ${thOrd('uniformes','setor','Setor','','width:11%')}
         ${thOrd('uniformes','nascimento','Nascimento','','width:7%')}
-        ${thOrd('uniformes','telefone','Telefone','','width:8.5%')}
-        ${thOrd('uniformes','cpf','CPF','','width:8%')}
-        ${thOrd('uniformes','terceiro','Terceiro','','width:8%')}
+        ${thOrd('uniformes','telefone','Telefone','','width:7.5%')}
+        ${thOrd('uniformes','cpf','CPF','','width:7%')}
+        ${thOrd('uniformes','terceiro','Terceiro','','width:6.5%')}
         ${thOrd('uniformes','sapato','Calçado','n','width:4.5%')}
         ${thOrd('uniformes','camisa','Camisa','','width:4.5%')}
         ${thOrd('uniformes','calca','Calça','','width:4.5%')}
@@ -2242,20 +2274,20 @@ function renderUniformes(){
 
   if (!linhasOrd.length) h += `<tr><td colspan="15"><div class="empty">Nenhum registro com esses filtros.</div></td></tr>`;
   linhasOrd.forEach(({u,i}) => {
-    h += `<tr${autoriaAttr(u)}><td>${cBase(i,'empresa',u.empresa,'empresas')}</td>
+    h += `<tr${autoriaAttr(u)}><td>${cBaseQ(i,'empresa',u.empresa,'empresas')}</td>
       <td>${cWrap(i,'nome',u.nome)}</td>
-      <td>${cSel(i,'vaga',u.vaga,['Nova posição','Reposição'])}</td>
+      <td>${cSelQ(i,'vaga',u.vaga,['Nova posição','Reposição'])}</td>
       <td${u.idVaga ? ' data-vinc="1" title="Vem da aba Vagas — corrija lá e muda em todo lugar"' : ''}>${cDate(i,'admissao',u.admissao)}</td>
-      <td>${cBase(i,'cargo',u.cargo,'cargos')}</td>
-      <td>${cBase(i,'setor',u.setor,'departamentos')}</td>
+      <td>${cBaseQ(i,'cargo',u.cargo,'cargos')}</td>
+      <td>${cBaseQ(i,'setor',u.setor,'departamentos')}</td>
       <td>${cDate(i,'nascimento',u.nascimento)}</td>
       <td>${cWrap(i,'telefone',u.telefone)}</td>
       <td>${cWrap(i,'cpf',u.cpf)}</td>
-      <td>${cBase(i,'terceiro',u.terceiro,'terceiros')}</td>
+      <td>${cBaseQ(i,'terceiro',u.terceiro,'terceiros')}</td>
       <td>${cTxt(i,'sapato',u.sapato)}</td>
-      <td>${cSel(i,'camisa',u.camisa,TAM,'—',true)}</td>
-      <td>${cSel(i,'calca',u.calca,TAM,'—',true)}</td>
-      <td>${cSel(i,'entregue',u.entregue,['SIM','NÃO'])}</td>
+      <td>${cSelQ(i,'camisa',u.camisa,TAM,'—',true)}</td>
+      <td>${cSelQ(i,'calca',u.calca,TAM,'—',true)}</td>
+      <td>${cSelQ(i,'entregue',u.entregue,['SIM','NÃO'])}</td>
       <td class="calc"><button class="rowbtn" data-del="uniformes" data-i="${i}">✕</button></td></tr>`;
   });
   h += `</tbody></table></div>`;
@@ -5219,7 +5251,7 @@ function sincLocal(){
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 11;
+const VERSAO_APP = 12;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
