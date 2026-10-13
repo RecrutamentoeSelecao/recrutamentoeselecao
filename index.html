@@ -785,7 +785,6 @@ table.grid.cabe .selq::after{top:4px}
   <section class="panel" id="p-painel" role="tabpanel"></section>
   <section class="panel" id="p-calendario" role="tabpanel" hidden></section>
   <section class="panel" id="p-vagas" role="tabpanel" hidden></section>
-  <section class="panel" id="p-candidatos" role="tabpanel" hidden></section>
   <section class="panel" id="p-experiencia" role="tabpanel" hidden></section>
   <section class="panel" id="p-admissao" role="tabpanel" hidden></section>
   <section class="panel" id="p-integracao" role="tabpanel" hidden></section>
@@ -1022,15 +1021,6 @@ function calcExp(e){
   return c;
 }
 
-function etapaCand(c){
-  if (c.aprovado === 'SIM') return 6;
-  if (c.dtGestor) return 5;
-  if (c.dtParecer) return 4;
-  if (c.dtRH) return 3;
-  if (c.dtTriagem) return 2;
-  return 1;
-}
-
 /* ============================================================ PAINEL */
 function renderPainel(){
   const P = S.params, slaTot = Math.max(...P.etapas.map(e=>e.sla));
@@ -1095,26 +1085,6 @@ function renderPainel(){
   });
   h += `</tbody></table></div></div>`;
 
-  /* funil */
-  const CD = S.candidatos;
-  const et = [
-    ['1. Cadastrados', CD.filter(c=>c.nome).length],
-    ['2. Triados', CD.filter(c=>c.dtTriagem).length],
-    ['3. Entrevista RH', CD.filter(c=>c.dtRH).length],
-    ['4. Parecer enviado', CD.filter(c=>c.dtParecer).length],
-    ['5. Entrevista gestor', CD.filter(c=>c.dtGestor).length],
-    ['6. Aprovados', CD.filter(c=>c.aprovado==='SIM').length],
-  ];
-  const maxF = Math.max(1, et[0][1]);
-  h += `<div class="sec"><div class="sec-head"><h2>Funil de candidatos</h2>
-    <span class="eyebrow src">${CD.length} na base</span></div><div class="bars">`;
-  et.forEach(([lab, n], i) => {
-    const conv = i===0 ? '' : (et[i-1][1] ? pct(n/et[i-1][1]) : '—');
-    h += `<div class="brow"><div class="blab">${lab}<span class="co">${conv?'conversão '+conv:''}</span></div>
-      <div class="btrack"><div class="bfill acc" style="width:${(n/maxF*100).toFixed(1)}%"></div></div>
-      <div class="bval">${n}</div></div>`;
-  });
-  h += `</div></div>`;
   h += `</div>`;
 
   /* produtividade */
@@ -1135,13 +1105,13 @@ function renderPainel(){
   const emps = [...new Set(S.vagas.map(v=>v.empresa).filter(Boolean))].sort();
   h += `<div class="sec"><div class="sec-head"><h2>Por empresa</h2></div><div class="tbl-wrap"><table class="rep">
     <thead><tr><th>Empresa</th><th class="n">Em aberto</th><th class="n">Fechadas</th>
-    <th class="n">TTF médio</th><th class="n">Mediana</th><th class="n">Candidatos</th></tr></thead><tbody>`;
+    <th class="n">TTF médio</th><th class="n">Mediana</th></tr></thead><tbody>`;
   emps.forEach(e => {
     const lin = V.filter(x => x.v.empresa===e);
     const t = lin.map(x=>x.c.ttf).filter(x=>x!=null && x>0);
     h += `<tr><td>${esc(e)}</td><td class="n">${lin.filter(x=>x.c.aberta).length}</td>
       <td class="n">${lin.filter(x=>!x.c.aberta).length}</td><td class="n">${d1(avg(t))}</td>
-      <td class="n">${d1(med(t))}</td><td class="n">${S.candidatos.filter(c=>c.empresa===e).length}</td></tr>`;
+      <td class="n">${d1(med(t))}</td></tr>`;
   });
   h += `</tbody></table></div></div>`;
 
@@ -1508,75 +1478,6 @@ function novaAnotacao(){
   const dt = document.getElementById('n-quando'); if (dt) dt.value = '';
 }
 
-function renderCandidatos(){
-  const L = S.listas;
-  const linhas = aplicarOrdem('candidatos', S.candidatos.map((c,i)=>({c,i})).filter(({c}) => {
-    if (ui.cFiltro==='ativos' && ['Reprovado(a)','Não compareceu','Sem retorno','Não possui interesse','Já está trabalhando','Desistiu'].includes(c.status)) return false;
-    if (ui.cFiltro==='aprovados' && c.aprovado!=='SIM') return false;
-    if (!passaEmpresa('candidatos', c.empresa)) return false;
-    if (ui.cBusca){ const q=ui.cBusca.toLowerCase();
-      if (!((c.nome||'')+' '+(c.empresa||'')+' '+(c.cargo||'')+' '+(c.telefone||'')).toLowerCase().includes(q)) return false; }
-    return true;
-  }), {
-    id:(r)=>r.c.id, nome:(r)=>r.c.nome, idVaga:(r)=>r.c.idVaga, empresa:(r)=>r.c.empresa,
-    cargo:(r)=>r.c.cargo, fonte:(r)=>r.c.fonte, dtCand:(r)=>r.c.dtCand, status:(r)=>r.c.status,
-    motivo:(r)=>r.c.motivo, etapa:(r)=>etapaCand(r.c),
-  });
-  let h = `<div class="toolbar">
-    <div class="chips">${['ativos','aprovados','todos'].map(f=>`<button class="chip-btn" data-cf="${f}"
-      aria-pressed="${ui.cFiltro===f}">${{ativos:'Em processo',aprovados:'Aprovados',todos:'Todos'}[f]}</button>`).join('')}</div>
-    ${selEmpresa('candidatos','candidatos','empresa')}
-    <input type="search" id="c-busca" placeholder="Buscar candidato…" value="${esc(ui.cBusca)}">
-    <button class="sm" id="c-add">+ Novo candidato</button>
-    <button class="sm" id="c-cv">+ Currículo</button>
-    ${btnOrdemPadrao('candidatos')}
-    <span class="count">${linhas.length} de ${S.candidatos.length}</span></div>`;
-  h += `<div class="grid-wrap"><table class="grid"><thead><tr>
-    ${thOrd('candidatos','id','ID','sticky1','min-width:52px')}${thOrd('candidatos','nome','Candidato','','min-width:230px')}
-    ${thOrd('candidatos','idVaga','Vaga','','min-width:96px')}${thOrd('candidatos','empresa','Empresa','','min-width:160px')}
-    ${thOrd('candidatos','cargo','Cargo','','min-width:190px')}
-    <th style="min-width:140px">Telefone</th>
-    <th style="min-width:200px">E-mail</th>${thOrd('candidatos','fonte','Fonte','','min-width:120px')}
-    ${thOrd('candidatos','dtCand','Candidatura','','min-width:118px')}${thOrd('candidatos','status','Status','','min-width:170px')}
-    ${thOrd('candidatos','motivo','Motivo da perda','','min-width:170px')}
-    <th style="min-width:118px">Triagem</th><th style="min-width:118px">Entrev. RH</th>
-    <th style="min-width:90px">Compareceu</th><th style="min-width:118px">Parecer</th>
-    <th style="min-width:118px">Entrev. gestor</th><th style="min-width:90px">Compareceu</th>
-    <th style="min-width:80px">Aprovado</th>${thOrd('candidatos','etapa','Etapa','','min-width:140px')}
-    <th style="min-width:130px">Currículo</th>
-    <th style="min-width:240px">Obs.</th><th style="min-width:34px"></th></tr></thead><tbody>`;
-  if (!linhas.length) h += `<tr><td colspan="22"><div class="empty">Nenhum candidato com esses filtros.</div></td></tr>`;
-  const ETQ = ['','Cadastrado','Triagem','Entrevista RH','Parecer enviado','Entrevista gestor','Aprovado'];
-  linhas.forEach(({c,i}) => {
-    h += `<tr${autoriaAttr(c)}><td class="idcell sticky1">${c.id}</td>
-      <td>${cWrap(i,'nome',c.nome)}</td>
-      <td>${cLista(i,'idVaga',c.idVaga,'vagas-abertas')}</td>
-      <td>${cBase(i,'empresa',c.empresa,'empresas')}</td>
-      <td>${cBase(i,'cargo',c.cargo,'cargos')}</td>
-      <td>${cTxt(i,'telefone',c.telefone)}</td>
-      <td>${cTxt(i,'email',c.email)}</td>
-      <td>${cBase(i,'fonte',c.fonte,'fontes')}</td>
-      <td>${cDate(i,'dtCand',c.dtCand)}</td>
-      <td>${cStt(i,'status',c.status,L.statusCand,'statusCand')}</td>
-      <td>${cBase(i,'motivo',c.motivo,'motivos')}</td>
-      <td>${cDate(i,'dtTriagem',c.dtTriagem)}</td>
-      <td>${cDate(i,'dtRH',c.dtRH)}</td>
-      <td>${cSel(i,'compRH',c.compRH,['SIM','NÃO'])}</td>
-      <td>${cDate(i,'dtParecer',c.dtParecer)}</td>
-      <td>${cDate(i,'dtGestor',c.dtGestor)}</td>
-      <td>${cSel(i,'compGestor',c.compGestor,['SIM','NÃO'])}</td>
-      <td>${cSel(i,'aprovado',c.aprovado,['SIM','NÃO'])}</td>
-      <td class="calc">${ETQ[etapaCand(c)]}</td>
-      <td class="calc">${(c.curriculoTexto || c.curriculo || c.curriculoArq)
-        ? `<button class="ntag" data-cv="${c.id}" title="${esc(c.curriculoArq || c.curriculo || '')}">ver currículo</button>`
-        : ''}</td>
-      <td>${cTxt(i,'obs',c.obs)}</td>
-      <td class="calc"><button class="rowbtn" data-del="candidatos" data-i="${i}">✕</button></td></tr>`;
-  });
-  h += `</tbody></table></div>`;
-  document.getElementById('p-candidatos').innerHTML = h;
-}
-
 function renderExperiencia(){
   const L = S.listas, P = S.params;
   const linhas = S.experiencia.map((e,i)=>({e,i,c:calcExp(e)})).filter(({e,c}) => {
@@ -1697,8 +1598,6 @@ function renderParametros(){
 
     <div class="pbox" style="margin-top:26px"><h3>Metas de gestão</h3>
       ${linha('Cumprimento de SLA','metaSla',P.metaSla,0.05)}
-      ${linha('Candidatos por vaga','metaCandVaga',P.metaCandVaga)}
-      ${linha('Taxa de comparecimento','metaComparecimento',P.metaComparecimento,0.05)}
     </div>
 
     <div class="pbox" style="margin-top:26px"><h3>Sincronização entre pessoas</h3>
@@ -2979,10 +2878,10 @@ function renderCalendario(){
 const ABAS = [
   {k:'painel', t:'Painel'}, {k:'calendario', t:'Calendário'}, {k:'vagas', t:'Vagas'},
   {k:'admissao', t:'Admissão'}, {k:'experiencia', t:'Experiência'}, {k:'integracao', t:'Integração'},
-  {k:'contratos', t:'Contratos'}, {k:'uniformes', t:'Uniformes'}, {k:'candidatos', t:'Candidatos'},
+  {k:'contratos', t:'Contratos'}, {k:'uniformes', t:'Uniformes'},
   {k:'base', t:'Base'}, {k:'parametros', t:'Parâmetros'},
 ];
-const RENDER = {painel:renderPainel, calendario:renderCalendario, vagas:renderVagas, candidatos:renderCandidatos,
+const RENDER = {painel:renderPainel, calendario:renderCalendario, vagas:renderVagas,
   admissao:renderAdmissao, experiencia:renderExperiencia, integracao:renderIntegracao,
   contratos:renderContratos, uniformes:renderUniformes,
   base:renderBase, parametros:renderParametros};
@@ -2999,7 +2898,6 @@ function renderTabs(){
       if (n) b = `<span class="badge crit">${n}</span>`;
     }
     if (a.k==='vagas') b = `<span class="badge">${abertas}</span>`;
-    if (a.k==='candidatos') b = `<span class="badge">${S.candidatos.length}</span>`;
     if (a.k==='admissao' && admPend) b = `<span class="badge">${admPend}</span>`;
     if (a.k==='experiencia' && atras) b = `<span class="badge crit">${atras}</span>`;
     if (a.k==='integracao' && integrPend) b = `<span class="badge crit">${integrPend}</span>`;
@@ -3155,7 +3053,7 @@ function estado(msg, cls){
   if (!cls) el.className = 'savestate' + (!podeGravar() ? ' err' : sujo ? ' dirty' : '');
 }
 
-const COLECAO = { vagas:'vagas', candidatos:'candidatos', experiencia:'experiencia',
+const COLECAO = { vagas:'vagas', experiencia:'experiencia',
   admissao:'admissao', integracao:'integracao', contratos:'contratos', uniformes:'uniformes' };
 function colecaoAtual(){ return COLECAO[ui.tab]; }
 
@@ -3182,7 +3080,6 @@ function buscando(id, atribuir, redesenha){
 
 const BUSCAS = [
   ['v-busca', v => ui.vBusca = v, () => renderVagas()],
-  ['c-busca', v => ui.cBusca = v, () => renderCandidatos()],
   ['e-busca', v => ui.eBusca = v, () => renderExperiencia()],
   ['a-busca', v => ui.aBusca = v, () => renderAdmissao()],
   ['i-busca', v => ui.iBusca = v, () => renderIntegracao()],
@@ -3306,7 +3203,7 @@ document.addEventListener('keydown', ev => {
   const t = ev.target;
   if (ev.key === 'Escape'){
     const md = document.getElementById('modal');
-    if (resolveConf || (md && !md.hidden)){ ev.preventDefault(); cvEstado = null; fecharModal(false); return; }
+    if (resolveConf || (md && !md.hidden)){ ev.preventDefault(); fecharModal(false); return; }
   }
   if (ev.key === 'Enter' && t.dataset && t.dataset.ladd){
     ev.preventDefault(); addValor(t.dataset.ladd, t.value); t.value = ''; t.focus();
@@ -3419,7 +3316,6 @@ document.addEventListener('click', async ev => {
   }
   if (t.dataset.tab){ ui.tab = t.dataset.tab; render(); return; }
   if (t.dataset.vf){ ui.vFiltro = t.dataset.vf; renderVagas(); return; }
-  if (t.dataset.cf){ ui.cFiltro = t.dataset.cf; renderCandidatos(); return; }
   if (t.dataset.ef){ ui.eFiltro = t.dataset.ef; renderExperiencia(); return; }
   if (t.dataset.af){ ui.aFiltro = t.dataset.af; renderAdmissao(); return; }
   if (t.dataset.if){ ui.iFiltro = t.dataset.if; renderIntegracao(); return; }
@@ -3582,12 +3478,6 @@ document.addEventListener('click', async ev => {
     if (alvo) alvo.scrollIntoView({block:'center'});
     return;
   }
-  if (t.id==='c-add'){ novoCandidato(); return; }
-  if (t.id==='c-cv'){ abrirCurriculo(); return; }
-  if (t.id==='cv-ler'){ cvLer(); return; }
-  if (t.id==='cv-criar'){ cvCriar(); return; }
-  if (t.id==='cv-voltar'){ abrirCurriculo(); return; }
-  if (t.dataset.cv !== undefined){ verCurriculo(t.dataset.cv); return; }
   if (t.id==='e-add'){ novoColaborador(); return; }
   if (t.dataset.del){
     const col = t.dataset.del, i = +t.dataset.i;
@@ -3645,14 +3535,6 @@ function novaVaga(){
     etapas: Array((S.params.etapas||[]).length || 8).fill(null), aprovado:'', inicio:null, talent:'', medirSla:true, obs:'' });
   ui.vFiltro='abertas'; ui.vBusca=''; ui.emp.vagas=''; marcarSujo(); render();
   toast('Vaga criada — preencha empresa e cargo');
-}
-function novoCandidato(){
-  S.candidatos.unshift({ id: proxId('candidatos','C'), idVaga:'', empresa:'', cargo:'', nome:'',
-    telefone:'', email:'', fonte:'', dtCand: iso(HOJE), status:'Em triagem', motivo:'',
-    dtTriagem:null, dtRH:null, compRH:'', dtParecer:null, dtGestor:null, compGestor:'', aprovado:'', obs:'',
-    curriculo:'', curriculoArq:'', curriculoTexto:'' });
-  ui.cFiltro='ativos'; ui.cBusca=''; marcarSujo(); render();
-  toast('Candidato criado');
 }
 function novoColaborador(){
   S.experiencia.unshift({ id: proxId('experiencia','E'), idVaga:'', nome:'', empresa:'', cargo:'', depto:'',
@@ -3870,575 +3752,6 @@ async function salvar(){
   }
 }
 
-/* ============================================================ CURRÍCULO
-   Lê o currículo aqui dentro do navegador — nada é enviado para fora.
-   PDF e DOCX são descompactados na mão (DecompressionStream), TXT é direto.
-   Imagem e PDF digitalizado não têm como ser lidos: o sistema avisa e você
-   cola o texto ou preenche à mão. Nada é preenchido por palpite: campo que
-   não apareceu no currículo fica vazio. */
-
-const UF = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR',
-            'PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
-
-/* ---- descompactação ---- */
-async function inflar(bytes, cru){
-  const ds = new DecompressionStream(cru ? 'deflate-raw' : 'deflate');
-  const r = new Blob([bytes]).stream().pipeThrough(ds);
-  return new Uint8Array(await new Response(r).arrayBuffer());
-}
-/* O navegador reclama de qualquer byte sobrando depois do fim do zlib, e muito
-   PDF deixa um \r\n solto antes do endstream. Vai aparando a cauda até passar. */
-async function inflarTolerante(bytes){
-  const tentativas = [bytes];
-  for (let k = 1; k <= 3 && bytes.length > k; k++) tentativas.push(bytes.subarray(0, bytes.length - k));
-  for (const t of tentativas){
-    try { return await inflar(t, false); } catch (e) { /* tenta a próxima */ }
-  }
-  for (const t of tentativas){
-    try { return await inflar(t, true); } catch (e) { /* tenta a próxima */ }
-  }
-  throw new Error('stream não descompacta');
-}
-
-/* ---- PDF ----
-   O texto de um PDF quase nunca está em texto: vem em streams comprimidos e,
-   quando a fonte é um subconjunto embutido (Word, LibreOffice, Google Docs),
-   cada letra vira um número de glifo. Por isso aqui a gente descompacta os
-   streams, lê o mapa /ToUnicode de cada fonte e traduz os números de volta. */
-function decodificarString(s){
-  let out = '';
-  for (let i = 0; i < s.length; i++){
-    if (s[i] !== '\\'){ out += s[i]; continue; }
-    const c = s[++i];
-    if (c === 'n' || c === 'r') out += '\n';
-    else if (c === 't') out += '\t';
-    else if (c === 'b' || c === 'f') out += ' ';
-    else if (c >= '0' && c <= '7'){
-      let oct = c;
-      while (oct.length < 3 && s[i+1] >= '0' && s[i+1] <= '7') oct += s[++i];
-      out += String.fromCharCode(parseInt(oct, 8));
-    }
-    else if (c === '\n') { /* quebra escapada: some */ }
-    else out += c;
-  }
-  return out;
-}
-function hexParaTexto(h){
-  let s = '';
-  const p = h.length % 4 ? h.padStart(Math.ceil(h.length/4)*4, '0') : h;
-  for (let i = 0; i + 3 < p.length; i += 4) s += String.fromCharCode(parseInt(p.substr(i,4), 16));
-  return s;
-}
-function lerCMap(txt){
-  const mapa = new Map();
-  let m;
-  const rc = /beginbfchar([\s\S]*?)endbfchar/g;
-  while ((m = rc.exec(txt)) !== null){
-    const rp = /<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]*)>/g; let q;
-    while ((q = rp.exec(m[1])) !== null) mapa.set(parseInt(q[1],16), hexParaTexto(q[2]));
-  }
-  const rr = /beginbfrange([\s\S]*?)endbfrange/g;
-  while ((m = rr.exec(txt)) !== null){
-    const rp = /<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(?:<([0-9A-Fa-f]*)>|\[([\s\S]*?)\])/g; let q;
-    while ((q = rp.exec(m[1])) !== null){
-      const lo = parseInt(q[1],16), hi = Math.min(parseInt(q[2],16), parseInt(q[1],16) + 4096);
-      if (q[3] !== undefined && q[3] !== ''){
-        const base = parseInt(q[3],16);
-        for (let c = lo; c <= hi; c++) mapa.set(c, String.fromCharCode(base + (c - lo)));
-      } else if (q[4]){
-        const its = q[4].match(/<([0-9A-Fa-f]*)>/g) || [];
-        its.forEach((h, i) => mapa.set(lo + i, hexParaTexto(h.slice(1,-1))));
-      }
-    }
-  }
-  return mapa;
-}
-function textoDeConteudo(txt, fontes){
-  let out = '', atual = null;
-  const traduz = (bruto) => {
-    const f = fontes ? (fontes.get(atual) || fontes.get('*')) : null;
-    if (!f || !f.mapa || !f.mapa.size) return bruto;
-    let r = '';
-    if (f.dois){
-      for (let i = 0; i + 1 < bruto.length; i += 2){
-        const c = (bruto.charCodeAt(i) << 8) | bruto.charCodeAt(i+1);
-        r += f.mapa.has(c) ? f.mapa.get(c) : ' ';
-      }
-    } else {
-      for (let i = 0; i < bruto.length; i++){
-        const c = bruto.charCodeAt(i);
-        r += f.mapa.has(c) ? f.mapa.get(c) : bruto[i];
-      }
-    }
-    return r;
-  };
-  const lerUm = (t) => {
-    if (t[0] === '<'){
-      const hex = t.slice(1, -1).replace(/\s+/g, '');
-      let r = '';
-      for (let i = 0; i + 1 < hex.length; i += 2) r += String.fromCharCode(parseInt(hex.substr(i,2), 16));
-      return r;
-    }
-    return decodificarString(t.slice(1, -1));
-  };
-  const re = /\/([^\s/<>\[\]()]+)\s+[-\d.]+\s+Tf|(\((?:\\[\s\S]|[^\\()])*\)|<[0-9A-Fa-f\s]*>)\s*(?:TJ|Tj|'|")|\[((?:[^\[\]\\]|\\[\s\S])*)\]\s*TJ|(T\*|Td|TD|ET)/g;
-  let m;
-  while ((m = re.exec(txt)) !== null){
-    if (m[1]){ atual = m[1]; continue; }
-    if (m[4]){ out += '\n'; continue; }
-    if (m[2]) out += traduz(lerUm(m[2]));
-    if (m[3]){
-      const rp = /(\((?:\\[\s\S]|[^\\()])*\)|<[0-9A-Fa-f\s]*>)|(-?\d+(?:\.\d+)?)/g;
-      let p;
-      while ((p = rp.exec(m[3])) !== null){
-        if (p[1]) out += traduz(lerUm(p[1]));
-        else if (parseFloat(p[2]) < -120) out += ' ';
-      }
-    }
-  }
-  return out;
-}
-/* ASCII85 e ASCIIHex: filtros de texto que alguns geradores usam antes do Flate */
-function a85(txt){
-  let t = txt.replace(/\s+/g, '');
-  if (t.startsWith('<~')) t = t.slice(2);
-  const fim = t.indexOf('~>'); if (fim >= 0) t = t.slice(0, fim);
-  const out = [];
-  let i = 0;
-  while (i < t.length){
-    if (t[i] === 'z'){ out.push(0,0,0,0); i++; continue; }
-    let grupo = t.slice(i, i + 5); i += 5;
-    const faltam = 5 - grupo.length;
-    grupo += 'uuuu'.slice(0, faltam);
-    let v = 0;
-    for (let k = 0; k < 5; k++) v = v * 85 + (grupo.charCodeAt(k) - 33);
-    out.push(...[(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255].slice(0, 4 - faltam));
-  }
-  return new Uint8Array(out);
-}
-function aHex(txt){
-  const h = txt.replace(/[^0-9A-Fa-f]/g, '');
-  const out = new Uint8Array(h.length >> 1);
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(h.substr(i*2, 2), 16);
-  return out;
-}
-const FILTROS_OK = ['/FlateDecode','/ASCII85Decode','/ASCIIHexDecode'];
-/* Cada stream do arquivo, já descompactado, com o dicionário que veio antes. */
-async function streamsPdf(bytes, bruto){
-  const saida = [];
-  const re = /[^d]stream\r?\n?/g;
-  let m;
-  while ((m = re.exec(bruto)) !== null){
-    const ini = m.index + m[0].length;
-    const fim = bruto.indexOf('endstream', ini);
-    if (fim < 0) break;
-    if (fim - ini < 2) { re.lastIndex = fim + 9; continue; }
-    const objIni = Math.max(0, bruto.lastIndexOf(' obj', m.index));
-    const dic = bruto.slice(objIni, m.index);
-    re.lastIndex = fim + 9;   /* pula o próprio "endstream" — senão ele casa de novo */
-    if (/\/Subtype\s*\/Image|\/DCTDecode|\/JPXDecode|\/CCITTFaxDecode|\/JBIG2Decode|\/FontFile/.test(dic)) continue;
-    const fl = dic.match(/\/Filter\s*(\[[^\]]*\]|\/\w+)/);
-    const filtros = fl ? (fl[1].match(/\/\w+/g) || []) : [];
-    if (filtros.some(f => !FILTROS_OK.includes(f))) continue;
-    const lm = dic.match(/\/Length\s+(\d+)(?!\s+\d+\s+R)/);
-    let corte = fim;
-    if (lm){ const n = +lm[1]; if (n > 0 && ini + n <= fim + 4) corte = Math.min(ini + n, bytes.length); }
-    let corpo = bytes.subarray(ini, corte);
-    try {
-      for (const f of filtros){
-        if (f === '/FlateDecode') corpo = await inflarTolerante(corpo);
-        else if (f === '/ASCII85Decode') corpo = a85(new TextDecoder('latin1').decode(corpo));
-        else if (f === '/ASCIIHexDecode') corpo = aHex(new TextDecoder('latin1').decode(corpo));
-      }
-      saida.push({ dic, obj: (bruto.slice(Math.max(0,objIni-24), objIni).match(/(\d+)\s+0\s*$/)||[])[1],
-                   texto: new TextDecoder('latin1').decode(corpo) });
-    } catch (e) { /* stream que não abre: segue */ }
-  }
-  return saida;
-}
-/* nome usado no conteúdo (/F1) → mapa de glifos daquela fonte.
-   O dicionário de recursos tanto pode estar escrito na página (/Font << /F1 34 0 R >>)
-   quanto num objeto à parte (/Font 35 0 R), então procuro os objetos de fonte primeiro
-   e depois qualquer apelido no arquivo que aponte para um deles. */
-function mapasDeFonte(bruto, streams){
-  const cmaps = new Map();
-  streams.forEach(s => { if (s.obj && /beginbfchar|beginbfrange/.test(s.texto)) cmaps.set(s.obj, lerCMap(s.texto)); });
-
-  const objsFonte = new Map();
-  const reObj = /(\d+)\s+0\s+obj\b/g;
-  let m;
-  while ((m = reObj.exec(bruto)) !== null){
-    const corpo = bruto.slice(m.index, Math.min(bruto.length, m.index + 1400));
-    if (!/\/Type\s*\/Font\b/.test(corpo)) continue;
-    const tu = corpo.match(/\/ToUnicode\s+(\d+)\s+0\s+R/);
-    const mapa = tu ? cmaps.get(tu[1]) : null;
-    if (mapa && mapa.size) objsFonte.set(m[1], {mapa, dois: /\/Subtype\s*\/Type0/.test(corpo)});
-  }
-
-  const fontes = new Map();
-  const rp = /\/([^\s/<>\[\]()]+)\s+(\d+)\s+0\s+R/g;
-  let q;
-  while ((q = rp.exec(bruto)) !== null){
-    const f = objsFonte.get(q[2]);
-    if (f && !fontes.has(q[1])) fontes.set(q[1], f);
-  }
-  /* fonte única sem apelido localizável: usa o mapa que existe */
-  if (!fontes.size && cmaps.size === 1){
-    const unico = [...cmaps.values()][0];
-    if (unico.size) fontes.set('*', {mapa: unico, dois: false});
-  }
-  return fontes;
-}
-async function textoDePdf(buf){
-  const bytes = new Uint8Array(buf);
-  const bruto = new TextDecoder('latin1').decode(bytes);
-  const streams = await streamsPdf(bytes, bruto);
-  const fontes = mapasDeFonte(bruto, streams);
-  return streams
-    .filter(s => /\bBT\b/.test(s.texto) && /T[Jj]/.test(s.texto))
-    .map(s => textoDeConteudo(s.texto, fontes))
-    .join('\n');
-}
-
-/* ---- DOCX: é um zip; pego word/document.xml ---- */
-function u16(b,o){ return b[o] | (b[o+1]<<8); }
-function u32(b,o){ return (b[o] | (b[o+1]<<8) | (b[o+2]<<16) | (b[o+3]<<24)) >>> 0; }
-async function arquivoDoZip(bytes, alvo){
-  let eocd = -1;
-  for (let i = bytes.length - 22; i >= 0 && i > bytes.length - 66000; i--){
-    if (bytes[i]===0x50 && bytes[i+1]===0x4b && bytes[i+2]===0x05 && bytes[i+3]===0x06){ eocd = i; break; }
-  }
-  if (eocd < 0) throw new Error('zip sem índice');
-  const total = u16(bytes, eocd + 10);
-  let p = u32(bytes, eocd + 16);
-  for (let n = 0; n < total; n++){
-    if (u32(bytes, p) !== 0x02014b50) break;
-    const metodo = u16(bytes, p + 10), comp = u32(bytes, p + 20);
-    const nLen = u16(bytes, p + 28), eLen = u16(bytes, p + 30), cLen = u16(bytes, p + 32);
-    const desloc = u32(bytes, p + 42);
-    const nome = new TextDecoder('utf-8').decode(bytes.subarray(p + 46, p + 46 + nLen));
-    if (nome === alvo){
-      const lnLen = u16(bytes, desloc + 26), leLen = u16(bytes, desloc + 28);
-      const ini = desloc + 30 + lnLen + leLen;
-      const dado = bytes.subarray(ini, ini + comp);
-      return metodo === 0 ? dado : await inflar(dado, true);
-    }
-    p += 46 + nLen + eLen + cLen;
-  }
-  throw new Error('não achei ' + alvo);
-}
-async function textoDeDocx(buf){
-  const xml = new TextDecoder('utf-8').decode(await arquivoDoZip(new Uint8Array(buf), 'word/document.xml'));
-  return xml
-    .replace(/<w:tab\b[^>]*\/>/g, '\t')
-    .replace(/<\/w:p>/g, '\n')
-    .replace(/<w:br\b[^>]*\/>/g, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&')
-    .replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'");
-}
-
-async function lerArquivoCurriculo(file){
-  const nome = (file.name || '').toLowerCase();
-  const buf = await file.arrayBuffer();
-  if (nome.endsWith('.pdf')) return {texto: limparTexto(await textoDePdf(buf)), tipo:'PDF'};
-  if (nome.endsWith('.docx')) return {texto: limparTexto(await textoDeDocx(buf)), tipo:'Word'};
-  if (nome.endsWith('.txt') || nome.endsWith('.md') || nome.endsWith('.rtf'))
-    return {texto: limparTexto(new TextDecoder('utf-8').decode(buf)), tipo:'Texto'};
-  if (nome.endsWith('.doc')) throw new Error('.doc antigo — abra no Word e salve como .docx ou PDF');
-  if (/\.(png|jpe?g|webp|gif|heic|bmp)$/.test(nome))
-    throw new Error('imagem não tem texto para ler — copie o texto do currículo e cole no campo abaixo');
-  throw new Error('formato não reconhecido — use PDF, .docx ou texto colado');
-}
-function limparTexto(t){
-  return (t || '').replace(/\r/g, '\n').replace(/\u00a0/g, ' ')
-    .replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n')
-    .split('\n').map(l => l.trim()).join('\n').trim();
-}
-/* Um PDF digitalizado devolve quase nada, ou lixo. Vale conferir antes de usar. */
-function textoUtil(t){
-  if (!t || t.length < 60) return false;
-  const letras = (t.match(/[A-Za-zÀ-ÿ]/g) || []).length;
-  const palavras = (t.match(/[A-Za-zÀ-ÿ]{3,}/g) || []).length;
-  return letras / t.length > 0.45 && palavras >= 15;
-}
-
-/* ============================================================ EXTRAÇÃO */
-const SECOES = {
-  objetivo:  /^(objetivo|cargo pretendido|vaga pretendida|área de interesse|pretens[aã]o)/i,
-  formacao:  /^(forma[çc][aã]o|escolaridade|educa[çc][aã]o|acad[êe]mic)/i,
-  experiencia:/^(experi[êe]ncia|hist[óo]rico profissional|trajet[óo]ria|atua[çc][aã]o profissional)/i,
-  cursos:    /^(cursos|qualifica[çc]|complementar|certifica)/i,
-  idiomas:   /^(idiomas?)/i,
-  dados:     /^(dados pessoais|informa[çc][õo]es pessoais|contato)/i,
-};
-function secoes(linhas){
-  const mapa = {}; let atual = null;
-  linhas.forEach(l => {
-    const t = l.trim();
-    if (!t) return;
-    let achou = null;
-    if (t.length <= 60) for (const k in SECOES) if (SECOES[k].test(t)) { achou = k; break; }
-    if (achou){ atual = achou; mapa[atual] = mapa[atual] || []; return; }
-    if (atual) mapa[atual].push(t);
-  });
-  return mapa;
-}
-function pareceNome(l){
-  const t = l.trim();
-  if (t.length < 6 || t.length > 60) return false;
-  if (/[@\d:;•|]/.test(t)) return false;
-  if (/^(curr[íi]culo|curriculum|vitae|resumo|dados|contato|objetivo|perfil)/i.test(t)) return false;
-  const p = t.split(/\s+/);
-  if (p.length < 2 || p.length > 6) return false;
-  return p.every(x => /^[A-Za-zÀ-ÿ'’.-]+$/.test(x));
-}
-function extrairCurriculo(texto, listas){
-  const t = texto || '';
-  const linhas = t.split('\n');
-  const sec = secoes(linhas);
-  const r = { achados: [], faltando: [] };
-
-  const email = t.match(/[\w.+-]+@[\w-]+\.[\w.-]{2,}/);
-  r.email = email ? email[0].toLowerCase() : '';
-
-  const tel = t.match(/(?:\+?55[\s.-]*)?\(?\d{2}\)?[\s.-]?9?\d{4}[\s.-]?\d{4}/g);
-  r.telefone = tel ? fmtTel(tel.map(x => x.trim()).sort((a,b) => b.length - a.length)[0]) : '';
-
-  const lk = t.match(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[\w%-]+/i);
-  r.linkedin = lk ? lk[0].replace(/^(?!https?:)/, 'https://') : '';
-
-  const cpf = t.match(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/);
-  r.cpf = cpf ? fmtCPF(cpf[0]) : '';
-
-  const nasc = t.match(/nascimento[^\d]{0,20}(\d{2}\/\d{2}\/\d{4})/i)
-            || t.match(/\b(\d{2}\/\d{2}\/(?:19|20)\d{2})\b/);
-  r.nascimento = nasc ? nasc[1] : '';
-
-  const cid = t.match(new RegExp('([A-ZÀ-Ú][A-Za-zÀ-ÿ]+(?:[ ]+(?:d[aeo]s?[ ]+)?[A-ZÀ-Ú][A-Za-zÀ-ÿ]+){0,3})[ ]*[-–/,][ ]*(' + UF.join('|') + ')\\b'));
-  r.cidade = cid ? (cid[1] + ' - ' + cid[2]) : '';
-
-  /* nome: a primeira linha que parece nome; se não, a linha logo antes do e-mail */
-  r.nome = '';
-  for (let i = 0; i < Math.min(linhas.length, 12); i++) if (pareceNome(linhas[i])) { r.nome = linhas[i].trim(); break; }
-  if (!r.nome && email){
-    const li = linhas.findIndex(l => l.includes(email[0]));
-    for (let i = li; i >= 0 && i > li - 4; i--) if (pareceNome(linhas[i])) { r.nome = linhas[i].trim(); break; }
-  }
-  if (r.nome) r.nome = r.nome.replace(/\s+/g, ' ').toUpperCase();
-
-  /* cargo: primeiro tenta bater com um cargo já cadastrado na Base */
-  const alvo = normal(t);
-  let melhor = '';
-  (listas.cargos || []).forEach(c => {
-    const n = normal(c);
-    if (n.length >= 6 && alvo.includes(n) && n.length > normal(melhor).length) melhor = c;
-  });
-  r.cargo = melhor;
-  r.objetivo = (sec.objetivo || []).slice(0, 2).join(' ').slice(0, 160);
-  if (!r.cargo && r.objetivo){
-    const lim = r.objetivo.replace(/^(atuar|trabalhar|na [áa]rea de|como|vaga de|cargo de)\s+/i, '');
-    r.cargo = lim.split(/[.;,\n]/)[0].trim().slice(0, 60).toUpperCase();
-  }
-
-  r.formacao = (sec.formacao || []).filter(l => l.length > 4).slice(0, 3);
-  r.experiencia = (sec.experiencia || []).filter(l => l.length > 4).slice(0, 6);
-  r.cursos = (sec.cursos || []).filter(l => l.length > 4).slice(0, 3);
-  r.idiomas = (sec.idiomas || []).filter(l => l.length > 2).slice(0, 3);
-
-  /* instituição de ensino já cadastrada na Base */
-  r.instituicao = '';
-  (listas.instituicoes || []).forEach(inst => {
-    const n = normal(inst);
-    if (n.length >= 4 && alvo.includes(n)) r.instituicao = inst;
-  });
-
-  ['nome','telefone','email','cargo','cidade','nascimento','linkedin','cpf','instituicao']
-    .forEach(k => (r[k] ? r.achados : r.faltando).push(k));
-  if (r.formacao.length) r.achados.push('formacao'); else r.faltando.push('formacao');
-  if (r.experiencia.length) r.achados.push('experiencia'); else r.faltando.push('experiencia');
-  return r;
-}
-function normal(s){
-  return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ');
-}
-/* O que vira observação do candidato — só o que realmente saiu do currículo. */
-function resumoCurriculo(r, origem){
-  const p = [];
-  if (origem) p.push('Currículo: ' + origem);
-  if (r.cidade) p.push('Cidade: ' + r.cidade);
-  if (r.nascimento) p.push('Nascimento: ' + r.nascimento);
-  if (r.cpf) p.push('CPF: ' + r.cpf);
-  if (r.linkedin) p.push(r.linkedin);
-  if (r.objetivo) p.push('Objetivo: ' + r.objetivo);
-  if (r.formacao.length) p.push('Formação: ' + r.formacao.join(' · '));
-  if (r.experiencia.length) p.push('Experiência: ' + r.experiencia.slice(0, 4).join(' · '));
-  if (r.cursos.length) p.push('Cursos: ' + r.cursos.join(' · '));
-  if (r.idiomas.length) p.push('Idiomas: ' + r.idiomas.join(' · '));
-  return p.join(' | ');
-}
-
-/* ---- painel de pré-cadastro ---- */
-let cvEstado = null;   /* {texto, origem, tipo, extraido} */
-
-function abrirCurriculo(){
-  cvEstado = null;
-  const el = document.getElementById('modal');
-  el.innerHTML = `<div class="modal-box cvbox" role="dialog" aria-modal="true" aria-labelledby="cvt">
-    <h3 id="cvt">Pré-cadastro por currículo</h3>
-    <div class="cvcorpo" id="cv-corpo">${cvEntrada()}</div>
-    <div class="modal-acts">
-      <button data-conf="0">Fechar</button>
-      <button class="sm" id="cv-ler">Ler currículo</button>
-    </div></div>`;
-  el.hidden = false;
-  const f = document.getElementById('cv-arq');
-  if (f) f.focus();
-}
-function cvEntrada(){
-  return `<div class="cvzona" id="cv-zona">
-      <input type="file" id="cv-arq" accept=".pdf,.docx,.txt,.md,.rtf,.doc,image/*">
-      <div class="hint">PDF e Word (.docx) são lidos aqui mesmo, no seu navegador — o arquivo não sai daqui
-        e não fica guardado no sistema; o que fica é o texto que eu conseguir ler.
-        <b>PDF digitalizado e foto não têm texto para ler</b> — nesses casos copie o conteúdo e cole abaixo.</div>
-    </div>
-    <label class="cvlab">Ou cole o texto do currículo</label>
-    <textarea id="cv-texto" rows="5" placeholder="Cole aqui o currículo inteiro (Ctrl+A, Ctrl+C no PDF e Ctrl+V aqui)"></textarea>
-    <label class="cvlab">Link do currículo ou perfil <span class="opc">opcional</span></label>
-    <input id="cv-link" placeholder="https://linkedin.com/in/… ou link da pasta onde o arquivo está">
-    <div class="hint">O link fica guardado no cadastro do candidato. Não consigo abrir o link daqui para ler
-      o conteúdo — se quiser os dados preenchidos, use o arquivo ou cole o texto.</div>
-    <div id="cv-erro"></div>`;
-}
-
-async function cvLer(){
-  const erro = document.getElementById('cv-erro');
-  const arq = document.getElementById('cv-arq');
-  const colado = (document.getElementById('cv-texto').value || '').trim();
-  const link = (document.getElementById('cv-link').value || '').trim();
-  erro.innerHTML = '';
-  let texto = '', origem = '', tipo = '';
-
-  try {
-    if (arq && arq.files && arq.files[0]){
-      const f = arq.files[0];
-      erro.innerHTML = `<div class="hint">Lendo ${esc(f.name)}…</div>`;
-      const r = await lerArquivoCurriculo(f);
-      texto = r.texto; tipo = r.tipo; origem = f.name;
-      if (!textoUtil(texto)){
-        erro.innerHTML = `<div class="cverro"><b>Não consegui tirar texto legível deste arquivo.</b>
-          Costuma ser PDF digitalizado (foto de papel) ou com fonte convertida em desenho.
-          Copie o conteúdo do currículo e cole no campo de texto acima.</div>`;
-        if (!colado) return;
-        texto = ''; origem = '';
-      }
-    }
-    if (!texto && colado){ texto = limparTexto(colado); origem = origem || 'texto colado'; tipo = tipo || 'Texto'; }
-    if (!texto){
-      erro.innerHTML = `<div class="cverro">Escolha um arquivo ou cole o texto do currículo.</div>`;
-      return;
-    }
-  } catch (e){
-    erro.innerHTML = `<div class="cverro"><b>Não deu para ler:</b> ${esc(e.message || String(e))}</div>`;
-    return;
-  }
-
-  const ex = extrairCurriculo(texto, S.listas);
-  if (link && !ex.linkedin) ex.linkedin = link;
-  cvEstado = {texto, origem, tipo, link, ex};
-  document.getElementById('cv-corpo').innerHTML = cvRevisao(ex, origem, tipo, texto);
-  const acts = document.querySelector('#modal .modal-acts');
-  acts.innerHTML = `<button data-conf="0">Cancelar</button>
-    <button class="sm" id="cv-voltar">Trocar arquivo</button>
-    <button class="danger" id="cv-criar">Criar candidato</button>`;
-  const n = document.getElementById('cvf-nome');
-  if (n) { n.focus(); n.select(); }
-}
-
-function cvRevisao(ex, origem, tipo, texto){
-  const L = S.listas;
-  const campo = (id, rot, val, sug) => `<div class="cvlinha">
-    <label for="${id}">${rot}${val ? '' : ' <span class="opc">não veio no currículo</span>'}</label>
-    <input id="${id}" value="${esc(val || '')}"${sug ? ` list="${sug}"` : ''}></div>`;
-  const sel = (id, rot, val, lista, vazio) => `<div class="cvlinha">
-    <label for="${id}">${rot}</label>
-    <select id="${id}"><option value="">${vazio || '—'}</option>${
-      lista.map(o => `<option value="${esc(o)}"${o===val?' selected':''}>${esc(o)}</option>`).join('')}</select></div>`;
-
-  const abertas = S.vagas.filter(v => ABERTO(v.status));
-  const resumo = resumoCurriculo(ex, origem);
-  const faltam = ex.faltando.filter(k => ['nome','telefone','email','cargo'].includes(k));
-
-  return `<div class="cvresumo">Lido de <b>${esc(origem)}</b>${tipo ? ' (' + tipo + ')' : ''} —
-      ${texto.length.toLocaleString('pt-BR')} caracteres.
-      ${faltam.length
-        ? `<span class="cvfalta">Não achei no currículo: <b>${faltam.join(', ')}</b> — preencha à mão abaixo.</span>`
-        : 'Encontrei nome, telefone, e-mail e cargo.'}</div>
-    <div class="cvgrade">
-      ${campo('cvf-nome','Nome', ex.nome)}
-      ${campo('cvf-telefone','Telefone', ex.telefone)}
-      ${campo('cvf-email','E-mail', ex.email)}
-      ${campo('cvf-cargo','Cargo', ex.cargo, 'cargos')}
-      ${sel('cvf-vaga','Vaga', '', abertas.map(v => v.id + ' · ' + (v.cargo||'')), 'sem vaga por enquanto')}
-      ${sel('cvf-empresa','Empresa', '', L.empresas)}
-      ${sel('cvf-fonte','Fonte', ex.linkedin && /linkedin/i.test(ex.linkedin) ? (L.fontes.find(f=>/linkedin/i.test(f))||'') : '', L.fontes)}
-      ${sel('cvf-status','Status', 'Em triagem', L.statusCand)}
-    </div>
-    <label class="cvlab">Observações que vão para o cadastro</label>
-    <textarea id="cvf-obs" rows="4">${esc(resumo)}</textarea>
-    <details class="cvtexto"><summary>Ver o texto lido do currículo (${texto.length.toLocaleString('pt-BR')} caracteres)</summary>
-      <pre>${esc(texto.slice(0, 8000))}${texto.length > 8000 ? '\n[…]' : ''}</pre></details>`;
-}
-
-function cvCriar(){
-  if (!cvEstado) return;
-  const v = id => { const el = document.getElementById(id); return el ? (el.value || '').trim() : ''; };
-  const vagaSel = v('cvf-vaga');
-  const idVaga = vagaSel ? vagaSel.split(' · ')[0] : '';
-  const vg = idVaga ? vagaPorId(idVaga) : null;
-  const nome = v('cvf-nome');
-  if (!nome){
-    const el = document.getElementById('cvf-nome');
-    el.focus(); el.style.borderColor = 'var(--crit)';
-    return;
-  }
-  const c = {
-    id: proxId('candidatos','C'), idVaga,
-    empresa: padronizar('empresa', v('cvf-empresa') || (vg ? vg.empresa : '')),
-    cargo:   padronizar('cargo', v('cvf-cargo') || (vg ? vg.cargo : '')),
-    nome: padronizar('nome', nome), telefone: fmtTel(v('cvf-telefone')), email: v('cvf-email'),
-    fonte: v('cvf-fonte'), dtCand: iso(HOJE), status: v('cvf-status') || 'Em triagem',
-    motivo:'', dtTriagem:null, dtRH:null, compRH:'', dtParecer:null, dtGestor:null,
-    compGestor:'', aprovado:'', obs: v('cvf-obs'),
-    curriculo: cvEstado.link || cvEstado.ex.linkedin || '',
-    curriculoArq: cvEstado.origem || '',
-    curriculoTexto: (cvEstado.texto || '').slice(0, 6000),
-  };
-  S.candidatos.unshift(c);
-  cvEstado = null;
-  fecharModal(0);
-  ui.tab = 'candidatos'; ui.cFiltro = 'ativos'; ui.cBusca = '';
-  marcarSujo(); render();
-  toast('Candidato "' + nome + '" pré-cadastrado');
-}
-
-function verCurriculo(id){
-  const c = S.candidatos.find(x => x.id === id);
-  if (!c) return;
-  const el = document.getElementById('modal');
-  el.innerHTML = `<div class="modal-box cvbox" role="dialog" aria-modal="true">
-    <h3>Currículo de ${esc(c.nome || c.id)}</h3>
-    <div class="cvcorpo">
-      ${c.curriculoArq ? `<div class="hint">Origem: <b>${esc(c.curriculoArq)}</b></div>` : ''}
-      ${c.curriculo ? `<div class="hint">Link: <a href="${esc(c.curriculo)}" target="_blank" rel="noopener">${esc(c.curriculo)}</a></div>` : ''}
-      ${c.curriculoTexto
-        ? `<pre class="cvpre">${esc(c.curriculoTexto)}</pre>`
-        : `<div class="empty">Não há texto guardado para este candidato.</div>`}
-    </div>
-    <div class="modal-acts"><button data-conf="0">Fechar</button></div></div>`;
-  el.hidden = false;
-}
-
 /* ============================================================ CSV */
 function csv(linhas){
   return '﻿' + linhas.map(l => l.map(c => {
@@ -4450,15 +3763,6 @@ function csv(linhas){
 function tabelaCSV(){
   const P = S.params;
   switch (ui.tab){
-    case 'candidatos': return ['candidatos',
-      [['ID','ID da vaga','Empresa','Cargo','Candidato','Telefone','E-mail','Fonte','Candidatura',
-        'Status','Motivo da perda','Triagem','Entrevista RH','Compareceu RH','Parecer',
-        'Entrevista gestor','Compareceu gestor','Aprovado','Etapa','Currículo (origem)','Link do currículo','Observações'],
-       ...S.candidatos.map(c => [c.id, c.idVaga, c.empresa, c.cargo, c.nome, c.telefone, c.email,
-         c.fonte, fmtD(c.dtCand), c.status, c.motivo, fmtD(c.dtTriagem), fmtD(c.dtRH), c.compRH,
-         fmtD(c.dtParecer), fmtD(c.dtGestor), c.compGestor, c.aprovado,
-         ['','Cadastrado','Triagem','Entrevista RH','Parecer enviado','Entrevista gestor','Aprovado'][etapaCand(c)],
-         c.curriculoArq, c.curriculo, c.obs])]];
     case 'experiencia': return ['experiencia',
       [['Empresa','Gestor','Cargo','Colaborador','Admissão',
         S.params.expP1+' dias', 'Situação '+S.params.expP1, 'Prorrogar',
@@ -5320,7 +4624,7 @@ function sincLocal(){
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 14;
+const VERSAO_APP = 15;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
