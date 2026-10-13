@@ -701,6 +701,58 @@ table.grid.cabe .selq::after{top:4px}
   .topbar{padding:10px 12px 0}
   .two{grid-template-columns:1fr}
 }
+/* ===================== ASSISTENTE DE PRIORIDADES =====================
+   Tudo aqui tem prefixo .as- para não encostar em nenhum estilo do
+   sistema. Nenhuma regra existente foi alterada. */
+.as-painel{position:fixed; right:18px; bottom:18px; z-index:220; width:min(400px,calc(100vw - 28px));
+  max-height:min(640px,calc(100vh - 110px)); background:var(--surface);
+  border:1px solid var(--rule-strong); box-shadow:0 16px 50px rgba(0,0,0,.26);
+  display:none; flex-direction:column}
+.as-painel.aberto{display:flex}
+.as-cab{background:var(--accent); color:#fff; padding:11px 14px; display:flex; align-items:center; gap:10px}
+.as-cab b{font-size:13.5px}
+.as-cab .as-sub{font-size:10px; letter-spacing:.1em; text-transform:uppercase; opacity:.85}
+.as-cab button{margin-left:auto; background:none; border:0; color:inherit; font-size:19px;
+  line-height:1; cursor:pointer; opacity:.85; padding:0 2px}
+.as-corpo{flex:1; overflow-y:auto; padding:13px; display:flex; flex-direction:column; gap:10px}
+.as-msg{font-size:13px; line-height:1.55}
+.as-msg.eu{align-self:flex-end; background:var(--accent); color:#fff; padding:7px 12px;
+  border-radius:13px 13px 3px 13px; max-width:85%}
+.as-msg.ele{background:var(--surface-2); border:1px solid var(--rule); padding:10px 12px;
+  border-radius:13px 13px 13px 3px}
+.as-item{display:flex; gap:9px; padding:9px 0; border-top:1px solid var(--rule)}
+.as-item:first-child{border-top:0}
+.as-ord{flex:0 0 20px; height:20px; border-radius:50%; background:var(--accent); color:#fff;
+  font-size:11px; font-weight:700; display:grid; place-items:center; margin-top:1px}
+.as-t{font-weight:600; font-size:12.6px}
+.as-pq{font-size:11.5px; color:var(--ink-faint); margin-top:2px; line-height:1.45}
+.as-ir{background:none; border:0; color:var(--accent); font-size:11px; font-weight:600;
+  cursor:pointer; padding:3px 0 0; text-decoration:underline; text-underline-offset:2px}
+.as-chips{display:flex; flex-wrap:wrap; gap:6px; padding:0 13px 9px}
+.as-chip{border:1px solid var(--rule-strong); background:var(--surface); color:var(--ink-soft);
+  font:inherit; font-size:11.5px; padding:5px 10px; border-radius:14px; cursor:pointer}
+.as-chip:hover{border-color:var(--accent); color:var(--accent)}
+.as-entrada{display:flex; gap:6px; padding:10px 13px; border-top:1px solid var(--rule);
+  background:var(--surface-2)}
+.as-entrada input{flex:1; border:1px solid var(--rule-strong); background:var(--surface);
+  color:var(--ink); font:inherit; font-size:13px; padding:7px 9px}
+.as-entrada button{border:0; background:var(--accent); color:#fff; font:inherit; font-size:13px;
+  padding:7px 13px; cursor:pointer}
+.as-entrada button.as-voz{background:var(--surface); border:1px solid var(--rule-strong);
+  color:var(--ink-soft); padding:7px 10px; font-size:15px}
+.as-entrada button.as-voz.ouvindo{background:var(--crit-bg); border-color:var(--crit); color:var(--crit)}
+.as-rodape{font-size:10.5px; color:var(--ink-faint); padding:0 13px 10px; line-height:1.45}
+.as-conf{border:1px solid var(--accent); background:var(--surface); padding:11px 12px}
+.as-conf .as-ct{font-size:10px; letter-spacing:.11em; text-transform:uppercase; color:var(--accent);
+  font-weight:700}
+.as-conf dl{margin:8px 0 0; display:grid; grid-template-columns:auto 1fr; gap:4px 11px; font-size:12.5px}
+.as-conf dt{color:var(--ink-faint)} .as-conf dd{margin:0; font-weight:600}
+.as-conf .as-acoes{display:flex; gap:6px; margin-top:11px}
+.as-conf .as-acoes button{font:inherit; font-size:12px; padding:6px 12px; cursor:pointer}
+.as-conf .as-sim{border:0; background:var(--accent); color:#fff}
+.as-conf .as-nao{border:1px solid var(--rule-strong); background:var(--surface); color:var(--ink-soft)}
+#btn-assist .as-bolha{display:inline-block; min-width:16px; padding:0 4px; margin-left:5px;
+  border-radius:8px; background:var(--crit); color:#fff; font-size:10px; font-weight:700}
 </style>
 
 <div class="topbar">
@@ -714,6 +766,7 @@ table.grid.cabe .selq::after{top:4px}
       <button id="btn-csv" class="sm" title="Mostra o CSV da aba aberta para copiar">Exportar CSV desta aba</button>
       <button id="btn-pacote" class="sm" hidden title="Gera o pacote cifrado para mandar à administradora">Enviar alterações</button>
       <button id="btn-backup" class="sm" title="Gera uma cópia de segurança de tudo, cifrada, para você guardar">Cópia de segurança</button>
+      <button id="btn-assist" class="sm" hidden title="O que fazer primeiro hoje">Assistente</button>
       <button id="btn-sinc" class="sm" hidden title="Traz o que a outra pessoa gravou">Sincronizar</button>
       <button id="btn-save" class="primary" disabled>Salvar</button>
     </div>
@@ -741,6 +794,22 @@ table.grid.cabe .selq::after{top:4px}
   <section class="panel" id="p-base" role="tabpanel" hidden></section>
   <section class="panel" id="p-parametros" role="tabpanel" hidden></section>
 </main>
+
+<div class="as-painel" id="as-painel">
+  <div class="as-cab">
+    <div><b>Assistente</b><div class="as-sub">prioridades de hoje</div></div>
+    <button id="as-fechar" title="Fechar">&times;</button>
+  </div>
+  <div class="as-corpo" id="as-corpo"></div>
+  <div class="as-chips" id="as-chips"></div>
+  <div class="as-entrada">
+    <button id="as-voz" class="as-voz" title="Falar em vez de digitar">&#127897;</button>
+    <input id="as-txt" placeholder="Fale ou escreva… ex.: gestor entrevista dia 20">
+    <button id="as-enviar">Enviar</button>
+  </div>
+  <div class="as-rodape">Responde sobre prazo, SLA, experiência e calendário — é conta, não
+    adivinhação. Nada é gravado sem você confirmar.</div>
+</div>
 
 <div class="toast" id="toast"></div>
 <div id="datalists" hidden></div>
@@ -5251,7 +5320,7 @@ function sincLocal(){
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 13;
+const VERSAO_APP = 14;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
@@ -5847,6 +5916,420 @@ async function arrancar(dados){
   });
 }
 iniciar();
+
+/* ===================== ASSISTENTE DE PRIORIDADES =====================
+   Fica numa função fechada de propósito: ele LÊ o que o sistema já calcula
+   (compromissos, calcVaga, calcExp) e não publica nada no espaço global, de
+   modo que não há como colidir com nome nenhum do programa.
+
+   Duas regras que não mudam:
+   1. Ele nunca grava sozinho. Toda frase vira uma ficha de confirmação.
+   2. Ele não inventa. Se a conta não existir, ele diz que não sabe. */
+(function(){
+'use strict';
+
+const $ = id => document.getElementById(id);
+const sa = t => String(t == null ? '' : t).toLowerCase()
+  .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+/* S é declarado com let no mesmo script, então não existe em window:
+   aqui ele é alcançado pelo escopo, não pelo objeto global. */
+const pronto = () => { try { return !TRANCADO && !!(S && S.params && Array.isArray(S.vagas)); }
+                       catch (e) { return false; } };
+
+/* ---------------------------------------------------------- prioridades */
+/* Peso por natureza do prazo: o da CLT vem na frente porque, vencido, não
+   se recupera; o SLA interno atrasado ainda dá para correr atrás. Dentro
+   de cada natureza, manda o tamanho do atraso. */
+const PESO = { experiencia:300, vaga:180, contrato:140, integracao:120, uniforme:100, nota:60 };
+
+function prioridades(){
+  let lista = [];
+  try { lista = compromissos() || []; } catch (e) { return []; }
+  return lista.map(c => {
+    const atrasado = c.faltam < 0;
+    const peso = (PESO[c.tipo] || 90)
+      + (atrasado ? 150 + Math.min(130, (-c.faltam) * 6) : Math.max(0, 45 - c.faltam * 4));
+    return Object.assign({}, c, { peso, atrasado });
+  }).sort((a, b) => b.peso - a.peso);
+}
+
+function porque(c){
+  const un = c.corridos ? 'dia(s)' : 'dia(s) úteis';
+  const quando = c.faltam < 0 ? 'Devia estar pronto em ' + fmtD(c.data) + ' — <b>atrasado há '
+                   + (-c.faltam) + ' ' + un + '</b>.'
+    : c.faltam === 0 ? '<b>É para hoje</b> (' + fmtD(c.data) + ').'
+    : 'Para ' + fmtD(c.data) + ' — faltam ' + c.faltam + ' ' + un + '.';
+  const extra = c.tipo === 'experiencia'
+      ? ' Prazo da CLT: conta em dias corridos e não espera.'
+    : c.tipo === 'vaga' && c.nota && /etapa/.test(c.nota)
+      ? ' É a etapa que está segurando a vaga — cada dia aqui empurra todas as seguintes.'
+    : c.nota ? ' ' + esc(c.nota) : '';
+  return quando + extra;
+}
+
+const linha = (c, i) => `<div class="as-item"><div class="as-ord">${i + 1}</div><div>
+  <div class="as-t">${esc(c.titulo)}${c.quem ? ' · ' + esc(c.quem) : ''}
+    <span class="pill ${c.atrasado ? 'crit' : 'warn'}">${CAL_ROTULO[c.tipo] || c.tipo}</span></div>
+  <div class="as-pq">${porque(c)}</div>
+  <button class="as-ir" data-as-ir="${esc(c.aba)}">Abrir ${esc(c.aba)} →</button></div></div>`;
+
+/* ------------------------------------------------------------ conversa */
+const corpo = () => $('as-corpo');
+function diz(html){
+  const el = document.createElement('div');
+  el.className = 'as-msg ele'; el.innerHTML = html;
+  corpo().appendChild(el); corpo().scrollTop = corpo().scrollHeight;
+}
+function eu(txt){
+  const el = document.createElement('div');
+  el.className = 'as-msg eu'; el.textContent = txt;
+  corpo().appendChild(el); corpo().scrollTop = corpo().scrollHeight;
+}
+
+function ordemDoDia(){
+  const p = prioridades();
+  const h = new Date().getHours();
+  const ola = h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
+  const quem = (typeof quemSou === 'function' ? quemSou() : '') || '';
+  const nome = quem && quem !== 'ADMINISTRADORA' && quem !== 'EQUIPE'
+    ? ', ' + quem.split(' ')[0].charAt(0) + quem.split(' ')[0].slice(1).toLowerCase() : '';
+  if (!p.length){
+    diz(`<b>${ola}${nome}.</b> Olhei as vagas abertas, a experiência e o calendário:
+         <b>não há nada pendente</b>. Quando aparecer, eu ordeno aqui.`);
+    return;
+  }
+  const atras = p.filter(x => x.atrasado).length;
+  diz(`<b>${ola}${nome}.</b> ${atras ? 'Tem <b>' + atras + '</b> coisa(s) em atraso e ' : 'Tem '}
+       ${p.length - atras} chegando. Nesta ordem:`);
+  diz(p.slice(0, 4).map(linha).join(''));
+  if (p.length > 4) diz(`Outras <b>${p.length - 4}</b> estão na fila e podem esperar.`);
+  setTimeout(() => diz(`Dá para lançar escrevendo, também: <i>"a vaga de auxiliar, o gestor
+    entrevista dia 20"</i>. Eu mostro o que entendi antes de gravar.`), 50);
+}
+
+/* ------------------------------------------------- perguntas calculadas */
+const PERGUNTAS = [
+  { chip:'O que está fora do SLA?', chaves:['sla','fora do prazo','atrasad'],
+    fn(){
+      const P = S.params;
+      const f = (S.vagas || []).map(v => ({v, c: calcVaga(v)}))
+        .filter(x => x.c.aberta && x.c.statusSla === 'FORA')
+        .sort((a, b) => b.c.fora - a.c.fora);
+      if (!f.length) return 'Nenhuma vaga fora do SLA no momento.';
+      return `<b>${f.length} vaga(s)</b> com etapa fora do prazo:` + f.map(x => {
+        const quais = x.c.flags.map((fl, i) => fl === 'ATRASADO' ? P.etapas[i].nome : null)
+          .filter(Boolean);
+        return `<div class="as-item"><div class="as-ord">!</div><div>
+          <div class="as-t">${esc(x.v.cargo || x.v.id)}${x.v.empresa ? ' · ' + esc(x.v.empresa) : ''}</div>
+          <div class="as-pq">Aberta há ${x.c.dias} dias. Fora do prazo em
+            <b>${quais.length}</b> etapa(s): ${esc(quais.join(', '))}.
+            Agora está em <b>${esc(x.c.etapaNome)}</b>.</div></div></div>`;
+      }).join('');
+    }},
+  { chip:'O que vence esta semana?', chaves:['semana','vence','venc','prazo'],
+    fn(){
+      const p = prioridades().filter(c => c.faltam >= 0 && c.faltam <= 5);
+      if (!p.length) return 'Nada vence nos próximos dias úteis. O que pega é o que já passou.';
+      return 'Até o fim da semana:' + p.map(linha).join('');
+    }},
+  { chip:'Qual a vaga mais crítica?', chaves:['critic','pior','urgente','primeiro','comec'],
+    fn(){
+      const ab = (S.vagas || []).map(v => ({v, c: calcVaga(v)})).filter(x => x.c.aberta && x.v.abertura);
+      if (!ab.length) return 'Não há vaga em aberto com data de abertura preenchida.';
+      const pior = ab.sort((a, b) => (b.c.fora - a.c.fora) || (b.c.dias - a.c.dias))[0];
+      const slaTot = Math.max.apply(null, S.params.etapas.map(e => e.sla));
+      /* calcVaga.etapaNome é a última etapa CONCLUÍDA; quem está segurando a
+         vaga é a próxima não cumprida. Dizer "parada em" da concluída seria
+         apontar para o lugar errado. */
+      let prox = -1;
+      for (let i = 0; i < S.params.etapas.length; i++) if (!pior.v.etapas[i]){ prox = i; break; }
+      return `<b>${esc(pior.v.cargo || pior.v.id)}</b>${pior.v.empresa ? ', da ' + esc(pior.v.empresa) : ''}.
+        <br><br>Aberta há <b>${pior.c.dias} dias</b> (alvo do processo: ${slaTot}).
+        Última etapa concluída: <b>${esc(pior.c.etapaNome)}</b>, há
+        ${pior.c.diasEtapa == null ? '—' : pior.c.diasEtapa} dia(s).
+        ${prox >= 0 ? 'O que está segurando a vaga é <b>' + esc(S.params.etapas[prox].nome)
+            + '</b>, cujo prazo é de ' + S.params.etapas[prox].sla + ' dias da abertura.' : ''}
+        ${pior.c.fora ? '<br><br>São <b>' + pior.c.fora + ' etapa(s)</b> fora do prazo — e, como a régua é'
+          + ' acumulativa, cada dia parado aqui empurra todas as seguintes.' : ''}
+        <br><br>Farol: <span class="pill ${pior.c.farol === 'critico' ? 'crit'
+          : pior.c.farol === 'atencao' ? 'warn' : 'good'}">${pior.c.farol || '—'}</span>`;
+    }},
+  { chip:'Como está a experiência?', chaves:['experi','45','90','efetiv','prorrog'],
+    fn(){
+      const E = (S.experiencia || []).map(e => ({e, c: calcExp(e)}))
+        .filter(x => x.c.pendente || x.c.m1.k === 'crit' || x.c.m1.k === 'warn');
+      if (!E.length) return 'Nenhuma decisão de experiência pendente.';
+      return `<b>${E.length} pessoa(s)</b> esperando decisão:` + E.map(x => {
+        const m = !x.e.prorrog ? x.c.m1 : x.c.m2;
+        return `<div class="as-item"><div class="as-ord">${!x.e.prorrog ? S.params.expP1 : S.params.expP2}</div><div>
+          <div class="as-t">${esc(x.e.nome || '(sem nome)')}
+            <span class="pill ${m.k === 'crit' ? 'crit' : m.k === 'warn' ? 'warn' : 'good'}">${esc(m.t)}</span></div>
+          <div class="as-pq">${esc(x.c.acao)}. Admissão em ${fmtD(x.e.admissao)} —
+            ${x.c.diasCasa == null ? '' : x.c.diasCasa + ' dias de casa.'}</div></div></div>`;
+      }).join('');
+    }},
+  { chip:'Como estamos no mês?', chaves:['como estamos','no mes','resumo','numeros','visao geral'],
+    fn(){
+      const V = (S.vagas || []).map(v => ({v, c: calcVaga(v)}));
+      const ab = V.filter(x => x.c.aberta);
+      const ttf = V.map(x => x.c.ttf).filter(x => x != null && x > 0);
+      const med = V.filter(x => x.c.statusSla);
+      const dentro = med.filter(x => x.c.statusSla === 'DENTRO').length;
+      return `<b>Posição de hoje</b><br><br>
+        Vagas em aberto: <b>${ab.length}</b><br>
+        Aging médio das abertas: <b>${d1(avg(ab.map(x => x.c.dias)))}</b> dias<br>
+        Time to Fill médio: <b>${ttf.length ? d1(avg(ttf)) : '—'}</b> dias<br>
+        Dentro do SLA: <b>${med.length ? pct(dentro / med.length) : '—'}</b>
+        (${dentro} de ${med.length} medidas)<br>
+        Pendências no radar: <b>${prioridades().length}</b>`;
+    }},
+];
+
+/* ----------------------------------------------- entender a frase ditada */
+/* Casar por substring quebra fácil: "gestor vai falar" não aparece em "o
+   gestor da vaga X vai falar com os candidatos". Então cada etapa recebe
+   uma nota, somando palavra do próprio nome e sinônimo de ação. */
+const SIN = [
+  { re:/alinhamento|alinhar/,     p:['alinh','briefing','abertura com o gestor'] },
+  { re:/divulga/,                 p:['divulg','publiq','publico','publicou','anunci','no ar','subiu a vaga'] },
+  { re:/triagem|triar/,           p:['triagem','triei','triar','triou','curriculo','curriculos'] },
+  { re:/entrevista/,              p:['entrevist','falar','falou','conversar','conversa','recebe','vai ver'] },
+  { re:/parecer|shortlist/,       p:['parecer','shortlist'] },
+  { re:/aprova/,                  p:['aprov','fechamos','fechou','escolheu','escolhido'] },
+];
+function acharEtapa(t){
+  const etapas = (S.params && S.params.etapas) || [];
+  let melhor = -1, pts = 0;
+  etapas.forEach((e, i) => {
+    const nome = sa(e.nome);
+    let n = 0;
+    nome.split(' ').filter(w => w.length >= 5).forEach(w => {
+      if (t.indexOf(w.slice(0, 6)) >= 0) n += 2;
+    });
+    SIN.forEach(s => { if (s.re.test(nome) && s.p.some(x => t.indexOf(x) >= 0)) n += 4; });
+    const falaGestor = /gestor|gerente|lider/.test(t);
+    if (/gestor/.test(nome)) n += falaGestor ? 3 : -3;
+    if (/\brh\b/.test(nome) && /\brh\b|comigo|interna/.test(t)) n += 2;
+    if (n > pts){ pts = n; melhor = i; }
+  });
+  return pts >= 3 ? melhor : -1;
+}
+
+const SEMANA = ['domingo','segunda','terca','quarta','quinta','sexta','sabado'];
+function lerData(t){
+  if (/\bhoje\b/.test(t)) return iso(HOJE);
+  if (/\bamanha\b/.test(t)) return addD(iso(HOJE), 1);
+  if (/\bdepois de amanha\b/.test(t)) return addD(iso(HOJE), 2);
+  if (/\bontem\b/.test(t)) return addD(iso(HOJE), -1);
+  let m = t.match(/\b(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?\b/);
+  if (m){
+    const ano = m[3] ? (m[3].length === 2 ? 2000 + (+m[3]) : +m[3]) : HOJE.getFullYear();
+    return ano + '-' + String(+m[2]).padStart(2,'0') + '-' + String(+m[1]).padStart(2,'0');
+  }
+  m = t.match(/\bdia (\d{1,2})\b/);
+  if (m){
+    const x = new Date(HOJE.getFullYear(), HOJE.getMonth(), +m[1]);
+    if (x < HOJE) x.setMonth(x.getMonth() + 1);
+    return iso(x);
+  }
+  for (let i = 0; i < 7; i++){
+    if (new RegExp('\\b' + SEMANA[i] + '\\b').test(t)){
+      const x = new Date(HOJE);
+      let passos = (i - x.getDay() + 7) % 7;
+      if (passos === 0) passos = 7;
+      x.setDate(x.getDate() + passos);
+      return iso(x);
+    }
+  }
+  return null;
+}
+
+/* acha o registro pelo pedaço de nome que a pessoa falou */
+function melhorDe(lista, campos, t){
+  let achado = null, pts = 0;
+  (lista || []).forEach(r => {
+    const alvo = sa(campos.map(c => r[c] || '').join(' '));
+    let n = 0;
+    t.split(' ').filter(w => w.length >= 4).forEach(w => { if (alvo.indexOf(w) >= 0) n += w.length; });
+    if (n > pts){ pts = n; achado = r; }
+  });
+  return pts >= 5 ? achado : null;
+}
+function acharVaga(t){
+  const id = t.match(/\bv ?0*(\d{1,4})\b/);
+  if (id){
+    const alvo = 'V' + String(id[1]).padStart(4, '0');
+    const v = (S.vagas || []).find(x => x.id === alvo);
+    if (v) return v;
+  }
+  return melhorDe(S.vagas, ['cargo','empresa','aprovado','id'], t);
+}
+
+function interpretar(txt){
+  const t = sa(txt);
+  const data = lerData(t);
+
+  const vaga = acharVaga(t);
+  const k = acharEtapa(t);
+  if (vaga && k >= 0){
+    return { tipo:'etapa', vaga, k, data,
+      campos:[['Vaga', esc([vaga.cargo, vaga.empresa].filter(Boolean).join(' · ') || vaga.id) + ' · ' + vaga.id],
+              ['Etapa', (k + 1) + '. ' + esc(S.params.etapas[k].nome)],
+              ['Data', data ? fmtD(data)
+                 : '<span style="color:var(--crit)">faltou dizer o dia</span>']] };
+  }
+
+  const pessoa = melhorDe(S.experiencia, ['nome'], t);
+  if (pessoa && /(prorrog|efetiv|desligar|nao vou)/.test(t)){
+    const nao = /(nao |não )(vou |vamos )?(prorrog|efetiv)|desligar/.test(t);
+    const campo = (!pessoa.prorrog || /prorrog/.test(t)) ? 'prorrog' : 'efetiv';
+    return { tipo:'exp', pessoa, campo, valor: nao ? 'NÃO' : 'SIM',
+      campos:[['Pessoa', esc(pessoa.nome)],
+              ['Decisão', (campo === 'prorrog' ? 'Prorrogação' : 'Efetivação') + ': ' + (nao ? 'NÃO' : 'SIM')],
+              ['Marco', (campo === 'prorrog' ? S.params.expP1 : S.params.expP2) + ' dias']] };
+  }
+
+  if (/(lembr|anota|cobrar|avisar|ligar para|marcar de)/.test(t) && data){
+    return { tipo:'nota', texto: txt.trim(), data,
+      campos:[['Anotação', esc(txt.trim())], ['Para', fmtD(data)]] };
+  }
+  return null;
+}
+
+let PENDENTE = null;
+function confirmar(a){
+  PENDENTE = a;
+  const el = document.createElement('div');
+  el.className = 'as-msg ele';
+  el.innerHTML = `<div class="as-conf"><div class="as-ct">É isto que eu entendi?</div>
+    <dl>${a.campos.map(c => '<dt>' + c[0] + '</dt><dd>' + c[1] + '</dd>').join('')}</dl>
+    <div class="as-acoes"><button class="as-sim" id="as-sim">Confirmar e lançar</button>
+      <button class="as-nao" id="as-nao">Não é isso</button></div></div>`;
+  corpo().appendChild(el); corpo().scrollTop = corpo().scrollHeight;
+}
+
+function aplicar(){
+  const a = PENDENTE; PENDENTE = null;
+  if (!a) return;
+  if (a.tipo === 'etapa'){
+    if (!a.data){ diz('Falta o dia. Me diz, por exemplo: <i>"dia 20"</i>, <i>"sexta"</i> ou <i>"hoje"</i>.'); return; }
+    if (!Array.isArray(a.vaga.etapas)) a.vaga.etapas = [];
+    a.vaga.etapas[a.k] = a.data;
+    let novos = [];
+    try { novos = propagarVaga(a.vaga) || []; } catch (e) { /* segue */ }
+    marcarSujo(); render();
+    const c = calcVaga(a.vaga);
+    diz(`Lançado. <b>${esc(a.vaga.cargo || a.vaga.id)}</b> — ${esc(S.params.etapas[a.k].nome)}
+      em ${fmtD(a.data)}.<br><br>Última etapa concluída: <b>${esc(c.etapaNome)}</b>.
+      ${c.statusSla === 'FORA' ? 'Continua com <b>' + c.fora + ' etapa(s)</b> fora do prazo.'
+        : c.statusSla === 'DENTRO' ? 'A vaga está dentro do SLA.' : ''}
+      ${novos.length ? '<br><br>E <b>' + esc(novos[0]) + '</b> entrou na Admissão e nos controles seguintes.' : ''}`);
+  }
+  if (a.tipo === 'exp'){
+    a.pessoa[a.campo] = a.valor;
+    marcarSujo(); render();
+    diz(`Registrado: <b>${esc(a.pessoa.nome)}</b> —
+      ${a.campo === 'prorrog' ? 'prorrogação' : 'efetivação'}: ${a.valor}.`);
+  }
+  if (a.tipo === 'nota'){
+    S.notas.unshift({ id: proxId('notas','N'), texto: a.texto, idVaga:'',
+                      quando: a.data, feito:false, criada: iso(HOJE) });
+    marcarSujo(); render();
+    diz(`Anotado para <b>${fmtD(a.data)}</b>. Vai aparecer no Calendário e aqui na ordem do dia.`);
+  }
+}
+
+function responder(txt){
+  const t = sa(txt);
+  const r = PERGUNTAS.find(x => x.chaves.some(c => t.indexOf(sa(c)) >= 0));
+  if (r) return r.fn();
+  if (/ordem|hoje|prioridade|fazer|comec/.test(t)){
+    const p = prioridades();
+    return p.length ? p.slice(0, 5).map(linha).join('') : 'Não há nada pendente agora.';
+  }
+  return `Essa eu não sei responder. Eu faço conta sobre <b>prazo, SLA, experiência,
+    calendário e pendências</b> — o que está dentro do sistema.<br><br>
+    Para pergunta aberta, exporte a aba em CSV e leve ao Claude.`;
+}
+
+/* ------------------------------------------------------------- a janela */
+let aberto = false;
+function alternar(){
+  if (!pronto()) return;
+  aberto = !aberto;
+  $('as-painel').classList.toggle('aberto', aberto);
+  if (aberto && !corpo().childElementCount) ordemDoDia();
+  if (aberto) corpo().scrollTop = 0;
+}
+function enviar(){
+  const i = $('as-txt');
+  const t = (i.value || '').trim();
+  if (!t) return;
+  eu(t); i.value = '';
+  const acao = interpretar(t);
+  if (acao){ setTimeout(() => confirmar(acao), 200); return; }
+  setTimeout(() => diz(responder(t)), 200);
+}
+
+function montar(){
+  $('as-chips').innerHTML = PERGUNTAS
+    .map((p, i) => `<button class="as-chip" data-as-p="${i}">${p.chip}</button>`).join('');
+  $('btn-assist').addEventListener('click', alternar);
+  $('as-fechar').addEventListener('click', alternar);
+  $('as-enviar').addEventListener('click', enviar);
+  $('as-txt').addEventListener('keydown', ev => { if (ev.key === 'Enter') enviar(); });
+
+  document.addEventListener('click', ev => {
+    const c = ev.target.closest('.as-chip');
+    if (c){ const p = PERGUNTAS[+c.dataset.asP]; eu(p.chip); setTimeout(() => diz(p.fn()), 200); return; }
+    if (ev.target.id === 'as-sim'){ eu('Confirmo'); setTimeout(aplicar, 180); return; }
+    if (ev.target.id === 'as-nao'){
+      PENDENTE = null;
+      diz('Não gravei nada. Me diz de outro jeito — ou digite direto na célula da aba.');
+      return;
+    }
+    const ir = ev.target.closest('[data-as-ir]');
+    if (ir){ ui.tab = ir.dataset.asIr; render(); window.scrollTo(0, 0); alternar(); }
+  });
+
+  /* ditado do próprio navegador (Chrome). O áudio sai da máquina para virar
+     texto — por isso convém ditar vaga e dia, não nome e salário. */
+  const bv = $('as-voz');
+  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Rec){
+    bv.style.opacity = .4;
+    bv.title = 'Este navegador não tem ditado — use o Chrome';
+    bv.addEventListener('click', () => diz('Este navegador não tem ditado por voz. No Chrome o microfone funciona.'));
+  } else {
+    const r = new Rec();
+    r.lang = 'pt-BR'; r.interimResults = false; r.maxAlternatives = 1;
+    let ouvindo = false;
+    bv.addEventListener('click', () => { ouvindo ? r.stop() : r.start(); });
+    r.onstart = () => { ouvindo = true; bv.classList.add('ouvindo'); };
+    r.onend   = () => { ouvindo = false; bv.classList.remove('ouvindo'); };
+    r.onerror = () => { ouvindo = false; bv.classList.remove('ouvindo');
+      diz('Não consegui ouvir. Confira a permissão do microfone no navegador.'); };
+    r.onresult = ev => { $('as-txt').value = ev.results[0][0].transcript; enviar(); };
+  }
+
+  /* o botão só aparece depois que o conteúdo abriu, e traz o número de
+     atrasados — do mesmo jeito que a aba Calendário já faz */
+  setInterval(() => {
+    const b = $('btn-assist');
+    if (!b) return;
+    if (!pronto()){ b.hidden = true; return; }
+    b.hidden = false;
+    let n = 0;
+    try { n = prioridades().filter(x => x.atrasado).length; } catch (e) { n = 0; }
+    const alvo = 'Assistente' + (n ? '<span class="as-bolha">' + n + '</span>' : '');
+    if (b.innerHTML !== alvo) b.innerHTML = alvo;
+  }, 2000);
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', montar);
+else montar();
+
+})();
 </script>
 
 </body>
