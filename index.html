@@ -2175,10 +2175,18 @@ function renderContratos(){
     A linha nasce aqui sozinha quando uma vaga de <b>cargo de estágio</b> é fechada — de qualquer empresa.
     Cargo que não é de estágio não entra.</div>`;
 
-  const abertos = S.contratos.filter(k => k.nome && !k.assinado);
+  /* Furar o prazo é furar o prazo: conta quem voltou atrasado e quem ainda
+     não voltou e já passou da data. Separar os dois escondia metade. */
+  const reais = S.contratos.filter(k => k.nome && k.solic);
+  const abertos = reais.filter(k => !k.assinado);
   const semRetorno = abertos.filter(k => !k.retorno);
-  const atrasadosCiee = semRetorno.filter(k => calcContrato(k).sla.k === 'crit');
   const aguardAssin = abertos.filter(k => k.retorno).length;
+  const voltouTarde = reais.filter(k => { const c = calcContrato(k);
+    return c.diasRetorno != null && c.diasRetorno > sla; });
+  const devendoTarde = semRetorno.filter(k => calcContrato(k).sla.k === 'crit');
+  const furaram = voltouTarde.length + devendoTarde.length;
+  const comRetorno = reais.filter(k => calcContrato(k).diasRetorno != null);
+  const noPrazo = comRetorno.length - voltouTarde.length;
 
   /* Daqui para baixo é leitura, não lançamento: tudo vai para `analise` e
      entra na tela depois da grade. */
@@ -2186,22 +2194,28 @@ function renderContratos(){
     <div class="readout"><span class="k">Contratos em aberto</span>
       <span class="v">${abertos.length}</span>
       <span class="n">${semRetorno.length} no CIEE · ${aguardAssin} para assinar</span></div>
-    <div class="readout"><span class="k">Atrasados no CIEE</span>
-      <span class="v ${atrasadosCiee.length ? 'crit' : 'good'}">${atrasadosCiee.length}</span>
-      <span class="n">${atrasadosCiee.length ? 'passaram do prazo de ' + sla + 'd úteis' : 'nenhum fora do prazo'}</span></div>
+    <div class="readout"><span class="k">Fora do prazo do CIEE</span>
+      <span class="v ${furaram ? 'crit' : 'good'}">${furaram}</span>
+      <span class="n">${furaram
+        ? voltouTarde.length + ' voltaram atrasados · ' + devendoTarde.length + ' ainda devendo'
+        : 'nenhum passou dos ' + sla + 'd úteis'}</span></div>
     <div class="readout"><span class="k">Retorno médio do CIEE</span>
       <span class="v ${avg(ret) > sla ? 'warn' : 'good'}">${d1(avg(ret))}<span class="u">d</span></span>
       <span class="n">dias úteis · meta ${sla} · n = ${ret.length}</span></div>
     <div class="readout"><span class="k">Pior retorno</span>
       <span class="v">${ret.length ? Math.max(...ret) : '—'}<span class="u">d</span></span>
       <span class="n">dias úteis</span></div>
-    <div class="readout"><span class="k">Retornos fora do prazo</span>
-      <span class="v ${ret.length && foraPrazo/ret.length > 0.3 ? 'crit' : ''}">${foraPrazo}</span>
-      <span class="n">de ${ret.length} com retorno · ${ret.length ? pct(foraPrazo/ret.length) : '—'}</span></div>
+    <div class="readout"><span class="k">Cumprimento do prazo</span>
+      <span class="v ${comRetorno.length && noPrazo/comRetorno.length < 0.7 ? 'crit' : 'good'}">${
+        comRetorno.length ? pct(noPrazo/comRetorno.length) : '—'}</span>
+      <span class="n">${noPrazo} de ${comRetorno.length} voltaram dentro de ${sla}d</span></div>
     <div class="readout"><span class="k">Assinatura média da instituição</span>
       <span class="v">${d1(avg(S.contratos.map(k=>calcContrato(k).diasAssin).filter(x=>x!=null)))}<span class="u">d</span></span>
       <span class="n">do retorno até o contrato assinado</span></div>
-  </div>`;
+  </div>
+  <div class="hint" style="margin:-14px 0 20px">Os números acima e os gráficos abaixo consideram
+    <b>todos os ${S.contratos.length} contratos</b>, abertos e fechados. O filtro do topo vale
+    só para a tabela.</div>`;
 
   /* ---- retorno médio por instituição ----
      Comparação de grandeza entre categorias: barra horizontal, uma cor só,
@@ -4795,7 +4809,7 @@ function sincLocal(){
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 17;
+const VERSAO_APP = 18;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
