@@ -1,0 +1,39 @@
+# Ambiente local: PostgreSQL + API. Os valores abaixo são de DESENVOLVIMENTO.
+# Em produção, defina segredos por variáveis de ambiente/secret manager (nunca no repositório).
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rs
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rs-dev-local}
+      POSTGRES_DB: rs_fagron
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rs -d rs_fagron"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3333
+      DATABASE_URL: postgresql://rs:${POSTGRES_PASSWORD:-rs-dev-local}@postgres:5432/rs_fagron?schema=public
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?defina JWT_ACCESS_SECRET (>= 32 caracteres) no ambiente ou num .env}
+      JWT_ACCESS_TTL: 15m
+      REFRESH_TTL_DIAS: 7
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      TZ_NEGOCIO: America/Sao_Paulo
+      RETENCAO_CANDIDATO_MESES: 24
+    ports:
+      - "3333:3333"
+
+volumes:
+  pgdata:

@@ -2,7 +2,7 @@
 
 > Entradas: `docs/01-inventario-sistema-atual.md` (inventário) e `docs/02-benchmark-sistemas-rh.md` (benchmark REA + documentação pública).
 > Data: 20/10/2026. Esforço medido para **1 dev full-stack**: **P** = até 1 semana · **M** = 1–2 semanas · **G** = 3+ semanas.
-> **Situação do `backend/`:** na data desta versão a pasta ainda **não existia** no repositório (outro agente está criando Fastify + TypeScript + Prisma + PostgreSQL, organizado por domínio). Os módulos citados abaixo são a estrutura-alvo. Quando o `backend/README.md` e o `prisma/schema.prisma` forem publicados, confira os nomes.
+> **Situação do `backend/`:** implementado neste branch — Fastify + TypeScript + Prisma + PostgreSQL, 16 módulos por domínio (`backend/src/modules/`), 22 modelos em `backend/prisma/schema.prisma`, 93 operações REST (OpenAPI em `/docs`), 87 testes unitários passando. Detalhes em `backend/README.md`. A Fase 0 e boa parte da Fase 1 abaixo já têm base no código; o trabalho restante é endurecimento, implantação e migração do frontend.
 
 ---
 
