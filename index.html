@@ -2180,7 +2180,9 @@ function renderContratos(){
   const atrasadosCiee = semRetorno.filter(k => calcContrato(k).sla.k === 'crit');
   const aguardAssin = abertos.filter(k => k.retorno).length;
 
-  h += `<div class="readouts" style="margin-bottom:20px">
+  /* Daqui para baixo é leitura, não lançamento: tudo vai para `analise` e
+     entra na tela depois da grade. */
+  let analise = `<div class="readouts" style="margin:26px 0 20px">
     <div class="readout"><span class="k">Contratos em aberto</span>
       <span class="v">${abertos.length}</span>
       <span class="n">${semRetorno.length} no CIEE · ${aguardAssin} para assinar</span></div>
@@ -2208,7 +2210,7 @@ function renderContratos(){
     .filter(x => x.m != null).sort((a, b) => b.m - a.m);
   if (barras.length){
     const pior = Math.max(sla, ...barras.map(x => x.m));
-    h += `<div class="sec"><div class="sec-head"><h2>Retorno médio por instituição</h2>
+    analise += `<div class="sec"><div class="sec-head"><h2>Retorno médio por instituição</h2>
       <span class="eyebrow src">dias úteis da solicitação até o retorno · prazo ${sla}d</span></div>
       <div class="bars curto">` + barras.map(x =>
         `<div class="brow"><div class="blab">${esc(x.nome)}
@@ -2233,7 +2235,7 @@ function renderContratos(){
   const serieK = mesesK.map(m => baldeK[m] ? avg(baldeK[m]) : null);
   const totK = Object.values(baldeK).reduce((a, v) => a + v.length, 0);
   if (totK){
-    h += `<div class="sec"><div class="sec-head"><h2>Retorno do CIEE mês a mês</h2>
+    analise += `<div class="sec"><div class="sec-head"><h2>Retorno do CIEE mês a mês</h2>
       <span class="eyebrow src">média de dias úteis · ${totK} contrato(s) com retorno · prazo ${sla}d</span></div>
       ${colunas(mesesK, serieK, v => d1(v))}
       <div class="hint">Coluna mais alta é mês que demorou mais. O mês entra pela data da
@@ -2277,6 +2279,8 @@ function renderContratos(){
       <td class="calc"><button class="rowbtn" data-del="contratos" data-i="${i}">✕</button></td></tr>`;
   });
   h += `</tbody></table></div>`;
+
+  h += analise;
 
   if (inst.length){
     h += `<div class="sec"><div class="sec-head"><h2>Desempenho por instituição</h2>
@@ -4791,7 +4795,7 @@ function sincLocal(){
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 16;
+const VERSAO_APP = 17;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
