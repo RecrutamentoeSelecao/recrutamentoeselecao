@@ -1,0 +1,4996 @@
+"use strict";
+/* ============================================================ ESTADO */
+const HOJE = (() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); })();
+const DIA = 86400000;
+let S = null;              // estado de dados
+let sujo = false;          // há alterações não salvas
+let podeSalvar = false;    // capacidade de publicar disponível
+let salvando = false;
+const ui = { tab:'painel', calVista:'lista', calFora:[], calMes:null, vFiltro:'abertas', vBusca:'', cFiltro:'todos', cBusca:'',
+             eFiltro:'pendentes', eBusca:'', aFiltro:'pendentes', aBusca:'',
+             iFiltro:'pendentes', iBusca:'', kFiltro:'abertos', kBusca:'', uBusca:'',
+             eDe:'', eAte:'', iDe:'', iAte:'', kDe:'', kAte:'', uDe:'', uAte:'',
+             emp:{}, sort:{} };
+
+function parseD(s){ if(!s) return null; const p=s.split('-'); return new Date(+p[0], +p[1]-1, +p[2]); }
+function fmtD(s){ if(!s) return ''; const p=s.split('-'); return p[2]+'/'+p[1]+'/'+p[0]; }
+function addD(s, n){ const d=parseD(s); if(!d) return null; d.setDate(d.getDate()+n); return iso(d); }
+function iso(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+/* ---- dias úteis: pula sábado, domingo e os feriados cadastrados na Base ---- */
+function feriadosSet(){
+  if (!S._feriados){
+    S._feriados = new Set((S.listas.feriados || []).map(f => {
+      const t = String(f).trim();
+      const br = t.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      return br ? `${br[3]}-${br[2]}-${br[1]}` : t;
+    }));
+  }
+  return S._feriados;
+}
+function ehUtil(d){
+  const s = d.getDay();
+  if (s === 0 || s === 6) return false;
+  return !feriadosSet().has(iso(d));
+}
+function somarDiasUteis(base, n){
+  const d = parseD(base);
+  if (!d) return null;
+  let faltam = n;
+  while (faltam > 0){ d.setDate(d.getDate() + 1); if (ehUtil(d)) faltam--; }
+  return iso(d);
+}
+function diasUteisEntre(a, b){
+  const x = parseD(a), y = parseD(b);
+  if (!x || !y) return null;
+  const sinal = x > y ? -1 : 1;
+  const ini = sinal > 0 ? new Date(x) : new Date(y);
+  const fim = sinal > 0 ? y : x;
+  let n = 0;
+  while (ini < fim){ ini.setDate(ini.getDate() + 1); if (ehUtil(ini)) n++; }
+  return n * sinal;
+}
+
+function difD(a, b){ const x=parseD(a), y=parseD(b); if(!x||!y) return null; return Math.round((y-x)/DIA); }
+function desdeHoje(s){ const d=parseD(s); if(!d) return null; return Math.round((HOJE-d)/DIA); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function num(v){ return (v==null||v==='')?null:Number(v); }
+function med(a){ if(!a.length) return null; const s=[...a].sort((x,y)=>x-y), m=s.length>>1;
+  return s.length%2 ? s[m] : (s[m-1]+s[m])/2; }
+function avg(a){ return a.length ? a.reduce((x,y)=>x+y,0)/a.length : null; }
+function d1(v){ return v==null ? '—' : (Math.round(v*10)/10).toLocaleString('pt-BR'); }
+function pct(v){ return v==null ? '—' : (v*100).toFixed(1).replace('.',',')+'%'; }
+
+/* ======================================================= RÉGUA DE ETAPAS
+   Em agosto/2026 a régua encolheu de dez para oito etapas: saiu tudo que era
+   pós-aprovação (proposta, aceite, exame, admissão concluída) e entraram
+   Triagem CV Gestor e Entrevista RH. As datas já digitadas viajam pelo NOME
+   da etapa, nunca pela posição — por isso ninguém perde o que preencheu. A
+   antiga "Admissão concluída" vira a Data de admissão da vaga. */
+const chaveEtapa = t => String(t == null ? '' : t)
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+const ETAPA_DE_PARA = {
+  'ALINHAMENTO COM O GESTOR'    : 'ALINHAMENTO',
+  'DIVULGACAO PUBLICADA'        : 'DIVULGACAO',
+  'TRIAGEM CONCLUIDA'           : 'TRIAGEM CV RH',
+  'ENVIO DE PARECER / SHORTLIST': 'PARECER',
+  'ENTREVISTA COM O GESTOR'     : 'ENTREVISTA GESTOR',
+  'APROVACAO DO GESTOR'         : 'APROVACAO',
+};
+const ETAPA_ADMISSAO = 'ADMISSAO CONCLUIDA';
+
+function migrarEtapas(S2, semente){
+  const alvo = (semente.params && semente.params.etapas) || null;
+  if (!Array.isArray(alvo) || !alvo.length) return 0;
+  const vNova = semente.params.etapasV || 0;
+  if (!vNova || (S2.params.etapasV || 0) >= vNova) return 0;
+  const velhas = Array.isArray(S2.params.etapas) ? S2.params.etapas : [];
+  const destino = new Map(alvo.map((e, i) => [chaveEtapa(e.nome), i]));
+  const iAdm = velhas.findIndex(e => chaveEtapa(e.nome) === ETAPA_ADMISSAO);
+  const mapa = velhas.map(e => {
+    const k = chaveEtapa(e.nome);
+    if (destino.has(k)) return destino.get(k);
+    const alt = chaveEtapa(ETAPA_DE_PARA[k] || '');
+    return (alt && destino.has(alt)) ? destino.get(alt) : -1;
+  });
+  let n = 0;
+  (S2.vagas || []).forEach(v => {
+    const antigas = Array.isArray(v.etapas) ? v.etapas.slice() : [];
+    const novas = alvo.map(() => null);
+    antigas.forEach((d, i) => { const j = mapa[i]; if (j >= 0 && d && !novas[j]) novas[j] = d; });
+    if (iAdm >= 0 && antigas[iAdm] && !v.inicio) v.inicio = antigas[iAdm];
+    v.etapas = novas; n++;
+  });
+  S2.params.etapas = JSON.parse(JSON.stringify(alvo));
+  S2.params.etapasV = vNova;
+  return n;
+}
+
+/* Registro que chega de outra pessoa pode vir com a régua antiga. Aqui não dá
+   para consultar os nomes dela, então usamos o de-para posicional conhecido. */
+const DE_10_PARA_8 = [0, 1, 2, 5, 6, 7, -1, -1, -1, -1];
+function ajustarEtapasVaga(v){
+  if (!v) return;
+  const n = ((S.params && S.params.etapas) || []).length || 8;
+  if (!Array.isArray(v.etapas)) v.etapas = [];
+  if (v.etapas.length === 10 && n === 8){
+    const a = v.etapas.slice(), novas = Array(8).fill(null);
+    DE_10_PARA_8.forEach((j, i) => { if (j >= 0 && a[i] && !novas[j]) novas[j] = a[i]; });
+    if (a[9] && !v.inicio) v.inicio = a[9];
+    v.etapas = novas;
+    return;
+  }
+  while (v.etapas.length < n) v.etapas.push(null);
+  v.etapas.length = n;
+}
+
+/* ============================================================ CÁLCULO */
+const ABERTO = st => st && st!=='FECHADA' && st!=='CANCELADA' && st!=='CONGELADA';
+
+function calcVaga(v){
+  const P = S.params, slaTot = Math.max(...P.etapas.map(e=>e.sla));
+  const c = { slaTot };
+  const nEt = P.etapas.length;
+  c.aprovIdx = nEt - 1;
+  /* A régua de recrutamento termina na APROVAÇÃO. A data de admissão é um dado
+     da contratação — alimenta integração, experiência, contrato e uniforme —
+     mas não entra no SLA nem no aging. */
+  c.aprov    = v.etapas[nEt - 1] || null;
+  /* Aprovada é vaga encerrada: o aging para aqui, mesmo que o status ainda não
+     tenha sido mexido à mão. Mas ela só sai da lista "Em aberto" quando a data
+     de admissão também estiver preenchida — senão a linha some da tela bem na
+     hora em que falta justamente esse dado. */
+  c.encerrada = !!c.aprov || !ABERTO(v.status);
+  c.aberta   = ABERTO(v.status) && !(c.aprov && c.admissao);
+  c.admissao = v.inicio || null;
+  c.dias     = v.abertura ? (c.aprov ? difD(v.abertura, c.aprov) : desdeHoje(v.abertura)) : null;
+  c.ttf      = (v.abertura && c.admissao) ? difD(v.abertura, c.admissao) : null;
+  c.tth      = (v.etapas[1] && c.aprov) ? difD(v.etapas[1], c.aprov) : null;
+
+  let ult = -1;
+  for (let i=0;i<nEt;i++) if (v.etapas[i]) ult = i;
+  c.etapaIdx  = ult;
+  c.etapaNome = ult < 0 ? 'Requisição aberta' : P.etapas[ult].nome;
+
+  const marcos = [v.abertura, ...v.etapas].filter(Boolean).map(parseD);
+  c.diasEtapa = (!v.abertura || c.aprov) ? (c.aprov ? 0 : null)
+              : Math.round((HOJE - new Date(Math.max(...marcos))) / DIA);
+
+  c.flags = P.etapas.map((e, i) => {
+    if (!v.abertura || !v.medirSla) return '';
+    const lim = addD(v.abertura, e.sla);
+    if (!v.etapas[i]) return (iso(HOJE) > lim) ? 'ATRASADO' : 'PENDENTE';
+    return (v.etapas[i] <= lim) ? 'OK' : 'ATRASADO';
+  });
+  c.fora    = c.flags.filter(f=>f==='ATRASADO').length;
+  c.statusSla = (!v.abertura || !v.medirSla) ? '' : (c.fora===0 ? 'DENTRO' : 'FORA');
+
+  if (c.dias == null) c.farol = '';
+  else if (c.encerrada) c.farol = 'concluida';
+  else if (c.dias <= slaTot*P.agingVerde) c.farol = 'saudavel';
+  else if (c.dias <= slaTot*P.agingAmarelo) c.farol = 'atencao';
+  else c.farol = 'critico';
+  return c;
+}
+
+function calcExp(e){
+  const P = S.params, c = {};
+  c.lim1 = e.admissao ? addD(e.admissao, P.expP1 - 1) : null;
+  c.lim2 = e.admissao ? addD(e.admissao, P.expP2 - 1) : null;
+  c.diasCasa = e.admissao ? desdeHoje(e.admissao) + 1 : null;
+  /* O prazo agora cobra a DECISÃO, não o envio de um papel:
+     até os 45 dias é preciso dizer se prorroga; até os 90, se efetiva. */
+  const marco = (limite, decidido, rotulo) => {
+    if (!e.admissao) return {k:'', t:'', dias:null};
+    if (decidido) return {k:'good', t:rotulo, dias:null};
+    const rest = difD(iso(HOJE), limite);
+    if (rest < 0)  return {k:'crit', t:'venceu há '+(-rest)+'d', dias:rest};
+    if (rest <= 7) return {k:'warn', t:'vence em '+rest+'d', dias:rest};
+    return {k:'ok', t:'faltam '+rest+'d', dias:rest};
+  };
+  c.m1 = marco(c.lim1, !!e.prorrog, e.prorrog === 'SIM' ? 'prorrogado' : 'não prorrogado');
+  /* Se não prorrogou, o contrato encerra aos 45 dias: não há marco de 90. */
+  c.semSegundo = e.prorrog === 'NÃO';
+  c.m2 = c.semSegundo ? {k:'neut', t:'encerra aos '+P.expP1+' dias', dias:null}
+       : marco(c.lim2, !!e.efetiv, e.efetiv === 'SIM' ? 'efetivado' : 'não efetivado');
+  c.pendente = !e.efetiv && !c.semSegundo;
+  c.atrasada = (!e.prorrog && c.m1.k === 'crit') || (c.pendente && c.m2.k === 'crit');
+  c.acao = !e.admissao ? 'Informar admissão'
+         : c.semSegundo ? '— não prorrogado'
+         : e.efetiv ? '— encerrado'
+         : !e.prorrog ? 'Decidir prorrogação' : 'Decidir efetivação';
+  return c;
+}
+
+/* ============================================================ PAINEL */
+function renderPainel(){
+  const P = S.params, slaTot = Math.max(...P.etapas.map(e=>e.sla));
+  const V = S.vagas.map(v => ({v, c: calcVaga(v)}));
+  const abertas = V.filter(x => x.c.aberta && x.v.abertura).sort((a,b) => b.c.dias - a.c.dias);
+  const fechadas = V.filter(x => !x.c.aberta);
+  const ttfs = V.map(x=>x.c.ttf).filter(x => x!=null && x>0);
+  const medidas = V.filter(x => x.c.statusSla);
+  const dentro = medidas.filter(x => x.c.statusSla==='DENTRO').length;
+  const criticas = abertas.filter(x => x.c.farol==='critico').length;
+  const E = S.experiencia.map(e => ({e, c: calcExp(e)}));
+  const expAtras = E.filter(x => x.c.atrasada).length;
+  const expVence = E.filter(x => x.c.pendente && !x.c.atrasada &&
+      (x.c.m1.k==='warn' || x.c.m2.k==='warn')).length;
+  const efetTot = S.experiencia.filter(e => e.efetiv).length;
+  const efetSim = S.experiencia.filter(e => e.efetiv==='SIM').length;
+
+  const card = (k, v, cls, n) => `<div class="readout"><span class="k">${k}</span>
+    <span class="v ${cls||''}">${v}</span><span class="n">${n||''}</span></div>`;
+
+  let h = `<div class="readouts">
+    ${card('Vagas em aberto', abertas.length, '', 'posição de hoje')}
+    ${card('Aging médio das abertas', d1(avg(abertas.map(x=>x.c.dias)))+'<span class="u">d</span>',
+        avg(abertas.map(x=>x.c.dias))>slaTot?'crit':'', 'alvo '+slaTot+' · mediana '+d1(med(abertas.map(x=>x.c.dias))))}
+    ${card('Vagas críticas', criticas, criticas?'crit':'good', 'acima do SLA total')}
+    ${card('Time to Fill médio', d1(avg(ttfs))+'<span class="u">d</span>',
+        avg(ttfs)>slaTot?'warn':'good', 'mediana '+d1(med(ttfs))+' · n = '+ttfs.length)}
+    ${card('Dentro do SLA', medidas.length ? pct(dentro/medidas.length) : '—',
+        medidas.length && dentro/medidas.length < P.metaSla ? 'crit':'good',
+        dentro+' de '+medidas.length+' medidas')}
+    ${card('Avaliações atrasadas', expAtras, expAtras?'crit':'good', expVence+' vencendo em até 7d')}
+    ${card('Taxa de efetivação', efetTot ? pct(efetSim/efetTot) : '—', '', efetSim+' de '+efetTot+' encerrados')}
+  </div>`;
+
+  /* aging */
+  const maxD = Math.max(slaTot*1.5, ...abertas.map(x=>x.c.dias), 1);
+  h += `<div class="sec"><div class="sec-head"><h2>Aging da carteira aberta</h2>
+    <span class="eyebrow src">linha vertical = SLA de ${slaTot} dias</span></div>`;
+  h += abertas.length ? `<div class="bars">` + abertas.map(({v,c}) => {
+      const k = c.farol==='critico'?'crit':c.farol==='atencao'?'warn':'good';
+      return `<div class="brow">
+        <div class="blab"><span class="co">${esc(v.empresa)} · ${esc(v.status)}</span>${esc(v.cargo)||'<i>sem cargo</i>'}</div>
+        <div class="btrack sla" style="--slapos:${(slaTot/maxD*100).toFixed(1)}%">
+          <div class="bfill ${k}" style="width:${(c.dias/maxD*100).toFixed(1)}%"></div></div>
+        <div class="bval ${k}">${c.dias}d</div></div>`;
+    }).join('') + `</div>`
+    : `<div class="empty">Nenhuma vaga em aberto com data de abertura registrada.</div>`;
+  h += `</div>`;
+
+  h += `<div class="two">`;
+
+  /* SLA por etapa */
+  h += `<div class="sec"><div class="sec-head"><h2>SLA por etapa</h2>
+    <span class="eyebrow src">${medidas.length} vagas medidas</span></div><div class="tbl-wrap"><table class="rep">
+    <thead><tr><th>Etapa</th><th class="n">SLA</th><th class="n">No prazo</th><th class="n">Atrasadas</th><th class="n">%</th></tr></thead><tbody>`;
+  P.etapas.forEach((e, i) => {
+    const ok = V.filter(x => x.c.flags[i]==='OK').length;
+    const at = V.filter(x => x.c.flags[i]==='ATRASADO').length;
+    const p = (ok+at) ? ok/(ok+at) : null;
+    h += `<tr><td>${e.n}. ${esc(e.nome)}</td><td class="n">${e.sla}d</td><td class="n">${ok}</td>
+      <td class="n">${at}</td><td class="n"><span class="pill ${p==null?'neut':p>=P.metaSla?'good':'crit'}">${pct(p)}</span></td></tr>`;
+  });
+  h += `</tbody></table></div></div>`;
+
+  h += `</div>`;
+
+  /* produtividade */
+  const meses = [];
+  for (let i=11;i>=0;i--){ const d=new Date(HOJE.getFullYear(), HOJE.getMonth()-i, 1);
+    meses.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')); }
+  const contagem = meses.map(m => fechadas.filter(x => x.c.admissao && x.c.admissao.slice(0,7)===m).length);
+  const maxM = Math.max(1, ...contagem);
+  h += `<div class="sec"><div class="sec-head"><h2>Admissões por mês</h2>
+    <span class="eyebrow src">últimos 12 meses</span></div>
+    <div class="cols" style="grid-template-columns:repeat(12,1fr)">` +
+    contagem.map((n,i) => `<div class="colb"><span class="cv">${n||''}</span>
+      <div class="fill" style="height:${(n/maxM*100).toFixed(1)}%"></div></div>`).join('') +
+    `</div><div class="col-labels" style="grid-template-columns:repeat(12,1fr)">` +
+    meses.map(m => `<span>${m.slice(5)}/${m.slice(2,4)}</span>`).join('') + `</div></div>`;
+
+  /* por empresa */
+  const emps = [...new Set(S.vagas.map(v=>v.empresa).filter(Boolean))].sort();
+  h += `<div class="sec"><div class="sec-head"><h2>Por empresa</h2></div><div class="tbl-wrap"><table class="rep">
+    <thead><tr><th>Empresa</th><th class="n">Em aberto</th><th class="n">Fechadas</th>
+    <th class="n">TTF médio</th><th class="n">Mediana</th></tr></thead><tbody>`;
+  emps.forEach(e => {
+    const lin = V.filter(x => x.v.empresa===e);
+    const t = lin.map(x=>x.c.ttf).filter(x=>x!=null && x>0);
+    h += `<tr><td>${esc(e)}</td><td class="n">${lin.filter(x=>x.c.aberta).length}</td>
+      <td class="n">${lin.filter(x=>!x.c.aberta).length}</td><td class="n">${d1(avg(t))}</td>
+      <td class="n">${d1(med(t))}</td></tr>`;
+  });
+  h += `</tbody></table></div></div>`;
+
+  document.getElementById('p-painel').innerHTML = h;
+}
+
+/* ============================================================ GRADES */
+/* Menu sempre em ordem alfabética. As listas em que a ordem é a informação
+   — etapas do checklist, tamanhos de uniforme — passam ordenada:false. */
+function emOrdem(lista){
+  return (lista || []).slice().sort((a,b) => String(a).localeCompare(String(b),'pt-BR',{sensitivity:'base'}));
+}
+function opts(lista, val, vazio, manterOrdem){
+  const l = manterOrdem ? (lista || []) : emOrdem(lista);
+  return `<option value=""${val?'':' selected'}>${vazio||'—'}</option>` +
+    l.map(o => `<option${o===val?' selected':''}>${esc(o)}</option>`).join('') +
+    (val && !l.includes(val) ? `<option selected>${esc(val)}</option>` : '');
+}
+const cTxt  = (i,f,v) => `<input class="cell" data-i="${i}" data-f="${f}" value="${esc(v)}">`;
+const cDate = (i,f,v) => `<input class="cell" type="date" data-i="${i}" data-f="${f}" value="${esc(v)}">`;
+const cNum  = (i,f,v) => `<input class="cell" type="number" step="0.01" data-i="${i}" data-f="${f}" value="${v==null?'':v}">`;
+const cSel  = (i,f,v,l,z,ord) => `<select class="cell" data-i="${i}" data-f="${f}">${opts(l,v,z,ord)}</select>`;
+/* Menu fechado, alimentado pela Base. Evita que a mesma função vire cinco grafias
+   diferentes. Quem precisa de um valor que não existe cadastra ali mesmo. */
+const cBase = (i,f,v,lk) => `<select class="cell sel-base" data-i="${i}" data-f="${f}" data-base="${lk}"${
+  v ? ` title="${esc(v)}"` : ''}>${
+  opts(S.listas[lk] || [], v, '—')}<option value="__novo__">＋ cadastrar novo…</option></select>`;
+/* O mesmo menu da Base, mas mostrando o nome inteiro em várias linhas —
+   para colunas estreitas onde a função ou o setor não cabem numa linha só. */
+const envolver = (v, dentro) => `<div class="selq"${v ? ` title="${esc(v)}"` : ''}>` +
+  `<span class="selq-txt${v ? '' : ' vazio'}">${esc(v || '—')}</span>` + dentro + `</div>`;
+const cBaseQ = (i,f,v,lk) => envolver(v,
+  `<select class="cell sel-base" data-i="${i}" data-f="${f}" data-base="${lk}">` +
+  opts(S.listas[lk] || [], v, '—') +
+  `<option value="__novo__">＋ cadastrar novo…</option></select>`);
+/* o mesmo para os menus de lista fixa (tipo de vaga, sim/não…) */
+const cSelQ = (i,f,v,l,z,ord) => envolver(v,
+  `<select class="cell" data-i="${i}" data-f="${f}">${opts(l,v,z,ord)}</select>`);
+/* campo livre com sugestões da Base — aceita valor novo, que a aba Base sinaliza depois */
+const cLista = (i,f,v,lk) => `<input class="cell" list="dl-${lk}" data-i="${i}" data-f="${f}" value="${esc(v)}">`;
+/* Célula de texto que quebra em várias linhas — nome longo nunca fica cortado.
+   Usa contenteditable porque <input> não quebra linha. */
+/* Célula que é espelho da vaga: fica marcada para você saber que o lugar de
+   corrigir é a aba Vagas — se editar aqui, a próxima mexida na vaga sobrescreve. */
+const vinc = ligada => ligada ? ' class="vinc" title="Vem da aba Vagas — corrija lá e muda em todo lugar"' : '';
+const cWrap = (i,f,v,sug) => `<div class="cell wrap" contenteditable="plaintext-only" role="textbox"` +
+  ` data-i="${i}" data-f="${f}"${sug?` data-sug="${sug}"`:''}>${esc(v)}</div>`;
+
+/* ============================================================ PADRÕES DE DIGITAÇÃO
+   Tudo que é digitado nas tabelas entra em CAIXA ALTA. Ficam de fora o e-mail,
+   o link do currículo e o texto do currículo, onde caixa alta atrapalha.
+   Telefone e CPF entram na máscara sozinhos. */
+const SEM_CAIXA_ALTA = ['email','curriculo','curriculoTexto','telefone','cpf'];
+const caixaAlta = v => (v == null ? v : String(v).toLocaleUpperCase('pt-BR'));
+
+/* (62)9 9814-2277 para celular, (62) 3214-5678 para fixo. Fora disso, deixa como veio. */
+function fmtTel(v){
+  if (!v) return v || '';
+  let d = String(v).replace(/\D/g, '');
+  if (d.length === 13 && d.startsWith('55')) d = d.slice(2);
+  if (d.length === 12 && d.startsWith('55')) d = d.slice(2);
+  if (d.length === 11) return '(' + d.slice(0,2) + ')' + d[2] + ' ' + d.slice(3,7) + '-' + d.slice(7);
+  if (d.length === 10) return '(' + d.slice(0,2) + ') ' + d.slice(2,6) + '-' + d.slice(6);
+  if (d.length === 9)  return d[0] + ' ' + d.slice(1,5) + '-' + d.slice(5);
+  if (d.length === 8)  return d.slice(0,4) + '-' + d.slice(4);
+  return String(v).trim();
+}
+function fmtCPF(v){
+  if (!v) return v || '';
+  const d = String(v).replace(/\D/g, '');
+  if (d.length === 11) return d.slice(0,3) + '.' + d.slice(3,6) + '.' + d.slice(6,9) + '-' + d.slice(9);
+  if (d.length === 10) return fmtCPF(d.padStart(11, '0'));   /* CPF que perdeu o zero da frente */
+  return String(v).trim();
+}
+/* Passa o valor pelo padrão da coluna antes de gravar. */
+function padronizar(campo, valor){
+  if (valor == null || valor === '') return valor;
+  if (campo === 'telefone') return fmtTel(valor);
+  if (campo === 'cpf') return fmtCPF(valor);
+  if (SEM_CAIXA_ALTA.includes(campo)) return String(valor).trim();
+  return caixaAlta(String(valor).trim());
+}
+
+/* ---- largura automática das colunas fixas ----
+   A coluna se dimensiona pelos dados que estão na tela: cabe a grande maioria dos
+   nomes numa linha só, e o nome fora da curva quebra para a linha de baixo em vez
+   de esticar a coluna para todo mundo. Recalcula a cada filtro e a cada edição. */
+const _cv = document.createElement('canvas').getContext('2d');
+/* mesma fonte da célula, para o cálculo de largura bater com o que aparece */
+const FONTE_CELULA = '12.5px ' + (getComputedStyle(document.documentElement)
+  .getPropertyValue('--fonte').trim() || 'Inter, sans-serif');
+function medirTexto(t){ _cv.font = FONTE_CELULA; return _cv.measureText(String(t || '')).width; }
+function larguraAuto(valores, min, max, pct){
+  const ws = valores.filter(Boolean).map(medirTexto).sort((a, b) => a - b);
+  if (!ws.length) return min;
+  const alvo = ws[Math.min(ws.length - 1, Math.floor(ws.length * (pct == null ? 0.9 : pct)))];
+  return Math.round(Math.max(min, Math.min(max, alvo + 32)));
+}
+let FXW = {}, FX_LEFT = {};
+function definirFixas(pares){
+  FXW = {}; FX_LEFT = {};
+  let x = 0;
+  for (const [k, w] of pares){ FXW[k] = w; FX_LEFT[k] = x; x += w; }
+  FX_LEFT._total = x;
+}
+function calcularFixas(linhas){
+  const col = f => linhas.map(f);
+  definirFixas([
+    ['id', 44], ['status', 150],
+    ['empresa', larguraAuto(col(r => r.v.empresa), 150, 215, 1)],
+    ['cargo', larguraAuto(col(r => r.v.cargo), 150, 230)],
+    ['substituido', larguraAuto(col(r => r.v.substituido), 140, 220)],
+    ['aprovado', larguraAuto(col(r => r.v.aprovado), 140, 220)],
+    ['inicio', 122],
+  ]);
+}
+function calcularFixasUni(linhas){
+  const col = f => linhas.map(f);
+  definirFixas([
+    ['empresa', larguraAuto(col(r => r.u.empresa), 150, 210, 1)],
+    ['nome', larguraAuto(col(r => r.u.nome), 190, 250)],
+  ]);
+}
+function calcularFixasCon(linhas){
+  const col = f => linhas.map(f);
+  definirFixas([
+    ['empresa', larguraAuto(col(r => r.k.empresa), 150, 210, 1)],
+    ['nome', larguraAuto(col(r => r.k.nome), 180, 240)],
+    ['faculdade', larguraAuto(col(r => r.k.faculdade), 150, 220)],
+  ]);
+}
+function calcularFixasInt(linhas){
+  const col = f => linhas.map(f);
+  definirFixas([
+    ['admissao', 118],
+    ['empresa', larguraAuto(col(r => r.g.empresa), 150, 210, 1)],
+    ['nome', larguraAuto(col(r => r.g.nome), 180, 250)],
+  ]);
+}
+function calcularFixasExp(linhas){
+  const col = f => linhas.map(f);
+  definirFixas([
+    ['empresa', larguraAuto(col(r => r.e.empresa), 150, 210, 1)],
+    ['gestor', larguraAuto(col(r => r.e.gestor), 100, 170, 1)],
+    ['cargo', larguraAuto(col(r => r.e.cargo), 140, 210)],
+    ['nome', larguraAuto(col(r => r.e.nome), 160, 230)],
+    ['admissao', 118],
+  ]);
+}
+function calcularFixasAdm(linhas){
+  const col = f => linhas.map(f);
+  definirFixas([
+    ['idVaga', 86],
+    ['empresa', larguraAuto(col(r => r.c.empresa), 150, 210, 1)],
+    ['cargo', larguraAuto(col(r => r.c.cargo), 140, 210)],
+    ['gestor', larguraAuto(col(r => r.c.gestor), 100, 170, 1)],
+    ['substituido', larguraAuto(col(r => r.c.substituido), 130, 200)],
+    ['pessoa', larguraAuto(col(r => r.c.pessoa), 130, 200)],
+    ['inicio', 104],
+  ]);
+}
+/* Barra de progresso do checklist: vermelho → laranja → âmbar → verde. */
+function corPct(p){ return p >= 0.75 ? 'good' : p >= 0.5 ? 'warn' : p >= 0.25 ? 'ser' : 'crit'; }
+function barraPct(p){
+  const n = Math.round(p * 100), c = corPct(p);
+  return `<span class="meter" title="${n}% do checklist concluído"><i class="m-${c}" style="width:${n}%"></i></span>` +
+         `<b class="mpct t-${c}">${n}%</b>`;
+}
+const fxEstilo = k => `left:${FX_LEFT[k]}px;width:${FXW[k]}px;min-width:${FXW[k]}px;max-width:${FXW[k]}px`;
+const fx = (k, extra) => `class="fx${extra ? ' ' + extra : ''}" style="${fxEstilo(k)}"`;
+function renderDatalists(){
+  const listas = ['empresas','cargos','departamentos','fontes','instituicoes']
+    .map(k => `<datalist id="dl-${k}">` + emOrdem(S.listas[k]).map(o=>`<option value="${esc(o)}">`).join('') + `</datalist>`).join('');
+  const ordV = (a,b) => String(a.id).localeCompare(String(b.id),'pt-BR');
+  const vagas = `<datalist id="dl-vagas">` + S.vagas.slice().sort(ordV).map(v =>
+    `<option value="${v.id}">${esc([v.cargo, v.empresa].filter(Boolean).join(' · '))}</option>`).join('') + `</datalist>`;
+  const abertas = `<datalist id="dl-vagas-abertas">` + S.vagas.filter(v => ABERTO(v.status)).sort(ordV).map(v =>
+    `<option value="${v.id}">${esc([v.cargo, v.empresa].filter(Boolean).join(' · '))}</option>`).join('') + `</datalist>`;
+  document.getElementById('datalists').innerHTML = listas + vagas + abertas;
+}
+
+const CHAVES_VAGAS = {
+  status:(r)=>r.v.status, empresa:(r)=>r.v.empresa, cargo:(r)=>r.v.cargo,
+  substituido:(r)=>r.v.substituido, aprovado:(r)=>r.v.aprovado, abertura:(r)=>r.v.abertura,
+  dias:(r)=>r.c.dias, etapa:(r)=>r.c.etapaIdx, naetapa:(r)=>r.c.diasEtapa,
+  sla:(r)=>r.c.fora, ttf:(r)=>r.c.ttf, inicio:(r)=>r.v.inicio, tipo:(r)=>r.v.tipo,
+  depto:(r)=>r.v.depto, gestor:(r)=>r.v.gestor, salario:(r)=>r.v.salario, id:(r)=>r.v.id,
+};
+function vagasFiltradas(){
+  const linhas = S.vagas.map((v,i) => ({v, i, c: calcVaga(v)})).filter(({v,c}) => {
+    if (ui.vFiltro==='abertas' && !c.aberta) return false;
+    if (ui.vFiltro==='criticas' && c.farol!=='critico') return false;
+    if (ui.vFiltro==='fora' && c.statusSla!=='FORA') return false;
+    if (!passaEmpresa('vagas', v.empresa)) return false;
+    if (ui.vBusca){ const q=ui.vBusca.toLowerCase();
+      if (!((v.cargo||'')+' '+(v.empresa||'')+' '+(v.aprovado||'')+' '+(v.substituido||'')+' '+v.id).toLowerCase().includes(q)) return false; }
+    return true;
+  }).sort((a,b) => (b.c.aberta?1:0)-(a.c.aberta?1:0) || (b.v.abertura||'').localeCompare(a.v.abertura||''));
+  return aplicarOrdem('vagas', linhas, CHAVES_VAGAS);
+}
+
+function renderVagas(){
+  const P = S.params, L = S.listas, linhas = vagasFiltradas();
+  calcularFixas(linhas);
+  let h = `<div class="toolbar">
+    <div class="chips">
+      ${['abertas','criticas','fora','todas'].map(f => `<button class="chip-btn" data-vf="${f}"
+        aria-pressed="${ui.vFiltro===f}">${{abertas:'Em aberto',criticas:'Críticas',fora:'Fora do SLA',todas:'Todas'}[f]}</button>`).join('')}
+    </div>
+    ${selEmpresa('vagas','vagas','empresa')}
+    <input type="search" id="v-busca" placeholder="Buscar cargo, empresa, candidato…" value="${esc(ui.vBusca)}">
+    <button class="sm" id="v-add">+ Nova vaga</button>
+    ${btnOrdemPadrao('vagas')}
+    <span class="count">${linhas.length} de ${S.vagas.length}</span>
+  </div>`;
+
+  const CURTO = ['Alinhamento','Divulgação','Triagem CV RH','Triagem CV gestor',
+                 'Entrevista RH','Parecer','Entrevista gestor','Aprovação'];
+  const nEt = P.etapas.length;
+  h += `<div class="grid-wrap"><table class="grid vag"><thead>
+    <tr><th class="grp a stG" colspan="7" style="left:0;width:${FX_LEFT._total}px">Identificação</th><th class="grp a" colspan="1"></th>
+        <th class="grp c" colspan="5">Situação — automático</th>
+        <th class="grp b" colspan="${nEt}">Data de conclusão de cada etapa</th>
+        <th class="grp a" colspan="1">Resultado</th>
+        <th class="grp d" colspan="7">Detalhes</th></tr>
+    <tr>${thOrd('vagas','id','ID','fx',fxEstilo('id'))}
+        ${thOrd('vagas','status','Status','fx',fxEstilo('status'))}
+        ${thOrd('vagas','empresa','Empresa','fx',fxEstilo('empresa'))}
+        ${thOrd('vagas','cargo','Cargo','fx',fxEstilo('cargo'))}
+        ${thOrd('vagas','substituido','Substituição','fx',fxEstilo('substituido'))}
+        ${thOrd('vagas','aprovado','Aprovado(a)','fx',fxEstilo('aprovado'))}
+        ${thOrd('vagas','inicio','Data de admissão','fx fxfim',fxEstilo('inicio'))}
+        ${thOrd('vagas','abertura','Abertura','','min-width:118px')}
+        ${thOrd('vagas','dias','Aging','','min-width:104px')}${thOrd('vagas','dias','Dias','n','min-width:52px')}
+        ${thOrd('vagas','etapa','Etapa atual','','min-width:150px')}${thOrd('vagas','naetapa','Na etapa','n','min-width:60px')}
+        ${thOrd('vagas','sla','SLA','','min-width:96px')}`;
+  P.etapas.forEach((e, i) => h += `<th style="min-width:112px" title="${esc(e.nome)} — SLA ${e.sla} dias">${e.n}. ${esc(CURTO[i] || e.nome)}</th>`);
+  h += `${thOrd('vagas','ttf','TTF','n','min-width:52px')}
+        ${thOrd('vagas','tipo','Tipo','','min-width:150px')}${thOrd('vagas','depto','Departamento','','min-width:140px')}
+        ${thOrd('vagas','gestor','Gestor','','min-width:120px')}${thOrd('vagas','salario','Salário','n','min-width:88px')}
+        <th style="min-width:260px" title="Anotação livre sobre esta vaga">Observação</th>
+        <th style="min-width:64px">Medir SLA</th><th style="min-width:34px"></th>
+        </tr></thead><tbody>`;
+
+  if (!linhas.length) h += `<tr><td colspan="${nEt + 21}"><div class="empty">Nenhuma vaga com esses filtros.</div></td></tr>`;
+
+  linhas.forEach(({v,i,c}) => {
+    const fk = {saudavel:'good', atencao:'warn', critico:'crit', concluida:'neut'}[c.farol] || 'neut';
+    const fl = {saudavel:'🟢 Saudável', atencao:'🟡 Atenção', critico:'🔴 Crítico', concluida:'⚪ Concluída'}[c.farol] || '—';
+    h += `<tr${autoriaAttr(v)}><td ${fx('id','idcell')}>${v.id}</td>
+      <td ${fx('status')}>${cStt(i,'status',v.status,L.statusVaga,'statusVaga')}</td>
+      <td ${fx('empresa')}>${cBase(i,'empresa',v.empresa,'empresas')}</td>
+      <td ${fx('cargo')}>${cBase(i,'cargo',v.cargo,'cargos')}</td>
+      <td ${fx('substituido')}>${cWrap(i,'substituido',v.substituido)}</td>
+      <td ${fx('aprovado')}>${cWrap(i,'aprovado',v.aprovado)}</td>
+      <td ${fx('inicio','fxfim')}>${cDate(i,'inicio',v.inicio)}</td>
+      <td>${cDate(i,'abertura',v.abertura)}</td>
+      <td class="calc"><span class="pill ${fk}">${fl}</span></td>
+      <td class="calc n">${c.dias==null?'':c.dias}</td>
+      <td class="calc">${esc(c.etapaNome)}</td>
+      <td class="calc n">${c.diasEtapa==null?'':c.diasEtapa}</td>
+      <td class="calc">${c.statusSla ? `<span class="pill ${c.statusSla==='DENTRO'?'good':'crit'}">${c.statusSla==='DENTRO'?'Dentro':'Fora ('+c.fora+')'}</span>` : ''}</td>`;
+    for (let k=0;k<nEt;k++){
+      const f = c.flags[k];
+      const bg = f==='ATRASADO' ? 'var(--crit-bg)' : f==='OK' ? 'var(--good-bg)' : '';
+      h += `<td${bg?` style="background:${bg}"`:''}><input class="cell" type="date" data-i="${i}" data-et="${k}" value="${esc(v.etapas[k])}"></td>`;
+    }
+    h += `<td class="calc n">${c.ttf==null?'':c.ttf}</td>
+      <td>${cBase(i,'tipo',v.tipo,'tipoVaga')}</td>
+      <td>${cBase(i,'depto',v.depto,'departamentos')}</td>
+      <td>${cBase(i,'gestor',v.gestor,'gestores')}</td>
+      <td>${cNum(i,'salario',v.salario)}</td>
+      <td>${cWrap(i,'obs',v.obs)}</td>
+      <td class="calc" style="text-align:center"><input type="checkbox" data-i="${i}" data-sla="1"${v.medirSla?' checked':''}></td>
+      <td class="calc"><button class="rowbtn" data-del="vagas" data-i="${i}" title="Excluir">✕</button></td></tr>`;
+  });
+  h += `</tbody></table></div>
+    <div class="legenda">
+      <span class="lg-tit">Cor do status</span>
+      <span class="lg"><i class="stt t1"></i><i class="stt t2"></i><i class="stt t3"></i>
+        vaga andando — o cinza escurece conforme avança no funil</span>
+      <span class="lg"><i class="stt s-good"></i> fechada</span>
+      <span class="lg"><i class="stt s-warn"></i> parada esperando alguém</span>
+      <span class="lg"><i class="stt s-off"></i> congelada ou cancelada</span>
+    </div>
+    <div class="banner" style="margin-top:14px"><b>Medir SLA</b> — as vagas trazidas do histórico vêm desmarcadas porque a planilha antiga não guardava a data de cada etapa; medi-las inflaria os atrasos. Toda vaga nova nasce marcada.</div>`
+    + blocoAnotacoes();
+  document.getElementById('p-vagas').innerHTML = h;
+}
+
+/* ---- Anotações rápidas ----
+   Bloco de recado que fica embaixo da tabela de vagas. Serve para o que aparece
+   num alinhamento e ainda não virou campo: cobrança, combinado, lembrete.
+   Cada anotação pode apontar para uma vaga e ter uma data de lembrete. */
+function blocoAnotacoes(){
+  const notas = S.notas || [];
+  const abertas = notas.filter(n => !n.feito);
+  const feitas  = notas.filter(n => n.feito);
+  const hoje = iso(HOJE);
+  const prazo = n => {
+    if (!n.quando) return {t:'', k:''};
+    const d = difD(hoje, n.quando);
+    if (n.feito) return {t: fmtD(n.quando), k:'neut'};
+    if (d < 0)   return {t: 'atrasado ' + (-d) + 'd', k:'crit'};
+    if (d === 0) return {t: 'hoje', k:'warn'};
+    if (d <= 3)  return {t: 'em ' + d + 'd', k:'warn'};
+    return {t: fmtD(n.quando), k:'ok'};
+  };
+  /* abertas primeiro, as com data mais próxima no topo; sem data no fim */
+  const ordem = (a, b) => {
+    if (!!a.feito !== !!b.feito) return a.feito ? 1 : -1;
+    if (!!a.quando !== !!b.quando) return a.quando ? -1 : 1;
+    if (a.quando && b.quando && a.quando !== b.quando) return a.quando < b.quando ? -1 : 1;
+    return (b.criada || '').localeCompare(a.criada || '');
+  };
+  const vagasAbertas = S.vagas.filter(v => ABERTO(v.status));
+  const opcoes = ['<option value="">sem vaga</option>'].concat(vagasAbertas.map(v =>
+    `<option value="${v.id}">${v.id} · ${esc((v.cargo||'').slice(0,42))}</option>`)).join('');
+
+  let h = `<div class="notas" id="bloco-notas">
+    <div class="sec-head"><h2>Anotações rápidas</h2>
+      <span class="eyebrow src">${abertas.length} em aberto${feitas.length ? ' · ' + feitas.length + ' concluída' + (feitas.length>1?'s':'') : ''}</span>
+      ${feitas.length ? `<button class="sm" id="n-limpar" title="Apaga as anotações já concluídas">Limpar concluídas</button>` : ''}
+    </div>
+    <div class="nadd">
+      <input id="n-texto" placeholder="Anotar… ex.: cobrar retorno do gestor sobre a vaga de almoxarifado" maxlength="400">
+      <select id="n-vaga" title="Ligar a uma vaga em aberto (opcional)">${opcoes}</select>
+      <input type="date" id="n-quando" title="Lembrar em (opcional)">
+      <button class="sm" id="n-add">+ Anotar</button>
+    </div>`;
+
+  if (!notas.length){
+    h += `<div class="empty">Nada anotado ainda. O que você escrever aqui fica salvo com o resto do sistema.</div>`;
+  } else {
+    h += `<ul class="nlista">`;
+    notas.slice().sort(ordem).forEach(n => {
+      const pz = prazo(n);
+      const v = n.idVaga ? vagaPorId(n.idVaga) : null;
+      h += `<li class="nrow${n.feito ? ' feita' : ''}">
+        <button class="nck${n.feito ? ' on' : ''}" data-nck="${n.id}"
+          title="${n.feito ? 'Reabrir' : 'Marcar como resolvida'}" aria-pressed="${!!n.feito}">${n.feito ? '✓' : ''}</button>
+        <div class="ntxt cell wrap" contenteditable="plaintext-only" role="textbox" data-nedit="${n.id}">${esc(n.texto)}</div>
+        <span class="nmeta">
+          ${v ? `<button class="ntag" data-nvaga="${v.id}" title="Ver esta vaga na tabela">${v.id} · ${esc((v.cargo||'').slice(0,28))}</button>` : ''}
+          ${pz.t ? `<span class="pill ${pz.k}">${pz.t}</span>` : ''}
+        </span>
+        <button class="rowbtn" data-nrm="${n.id}" title="Apagar">✕</button></li>`;
+    });
+    h += `</ul>`;
+  }
+  return h + `</div>`;
+}
+
+function novaAnotacao(){
+  const cx = document.getElementById('n-texto');
+  const texto = (cx.value || '').trim();
+  if (!texto){ cx.focus(); return; }
+  const q = document.getElementById('n-quando').value || null;
+  S.notas.unshift({ id: proxId('notas','N'), texto,
+    idVaga: document.getElementById('n-vaga').value || '', quando: q, feito: false, criada: iso(HOJE) });
+  marcarSujo(); redesenhar();
+  const novo = document.getElementById('n-texto');
+  if (novo){ novo.value = ''; novo.focus(); }
+  const dt = document.getElementById('n-quando'); if (dt) dt.value = '';
+}
+
+function renderExperiencia(){
+  const L = S.listas, P = S.params;
+  const linhas = S.experiencia.map((e,i)=>({e,i,c:calcExp(e)})).filter(({e,c}) => {
+    if (ui.eFiltro==='pendentes' && !c.pendente) return false;
+    if (ui.eFiltro==='atrasadas' && !c.atrasada) return false;
+    if (!passaEmpresa('experiencia', e.empresa)) return false;
+    if (ui.eDe && (!e.admissao || e.admissao < ui.eDe)) return false;
+    if (ui.eAte && (!e.admissao || e.admissao > ui.eAte)) return false;
+    if (ui.eBusca && !((e.nome||'')+' '+(e.empresa||'')+' '+(e.cargo||'')+' '+(e.gestor||''))
+        .toLowerCase().includes(ui.eBusca.toLowerCase())) return false;
+    return true;
+  /* Ordem estável: registrar uma decisão não pode fazer a linha pular de lugar. */
+  }).sort((a,b) => (a.e.admissao||'9999').localeCompare(b.e.admissao||'9999') ||
+                   (a.e.nome||'').localeCompare(b.e.nome||'', 'pt-BR'));
+  const linhasOrd = aplicarOrdem('experiencia', linhas, {
+    empresa:(r)=>r.e.empresa, gestor:(r)=>r.e.gestor, cargo:(r)=>r.e.cargo, nome:(r)=>r.e.nome,
+    admissao:(r)=>r.e.admissao, lim1:(r)=>r.c.lim1, prorrog:(r)=>r.e.prorrog,
+    lim2:(r)=>r.c.lim2, efetiv:(r)=>r.e.efetiv, diasCasa:(r)=>r.c.diasCasa,
+  });
+  calcularFixasExp(linhasOrd);
+  const auto = S.experiencia.filter(e => e.idVaga).length;
+  const comData = ui.eDe || ui.eAte;
+
+  let h = `<div class="toolbar">
+    <div class="chips">${['atrasadas','pendentes','todas'].map(f=>`<button class="chip-btn" data-ef="${f}"
+      aria-pressed="${ui.eFiltro===f}">${{atrasadas:'Atrasadas',pendentes:'Em curso',todas:'Todas'}[f]}</button>`).join('')}</div>
+    ${selEmpresa('experiencia','experiencia','empresa')}
+    <span class="perioddo"><label>Admissão de</label>
+      <input type="date" data-exp-de value="${esc(ui.eDe||'')}">
+      <label>até</label>
+      <input type="date" data-exp-ate value="${esc(ui.eAte||'')}">
+      ${comData ? `<button class="sm ghost" data-exp-limpa title="Limpar o período">✕</button>` : ''}</span>
+    <input type="search" id="e-busca" placeholder="Buscar colaborador, cargo ou gestor…" value="${esc(ui.eBusca)}">
+    <button class="sm" id="e-lancar" title="Traz da Admissão todo mundo que ainda não está aqui">Lançar experiências</button>
+    <button class="sm" id="e-add">+ Novo colaborador</button>
+    ${btnOrdemPadrao('experiencia')}
+    <span class="count">${linhasOrd.length} de ${S.experiencia.length}</span></div>`;
+
+  /* ---- dash da aba: a leitura de gestão antes da planilha ----
+     Prorrogação e efetivação medem coisas diferentes: prorrogar é não ter
+     certeza aos 45 dias; efetivar é a decisão final. As duas juntas dizem
+     muito sobre a qualidade da contratação. */
+  const TE = S.experiencia.map(e => ({e, c: calcExp(e)}));
+  const emCurso = TE.filter(x => x.c.pendente && x.e.admissao);
+  const atrasadas = TE.filter(x => x.c.atrasada);
+  const vencendo = TE.filter(x => !x.c.atrasada &&
+      ((!x.e.prorrog && x.c.m1.k === 'warn') || (x.c.pendente && x.c.m2.k === 'warn')));
+  const decProrr = TE.filter(x => x.e.prorrog);
+  const prorrSim = decProrr.filter(x => x.e.prorrog === 'SIM').length;
+  const decEfet = TE.filter(x => x.e.efetiv);
+  const efetSim = decEfet.filter(x => x.e.efetiv === 'SIM').length;
+  const casa = emCurso.map(x => x.c.diasCasa).filter(x => x != null);
+  const cartao = (k, v, cls, n) => `<div class="readout"><span class="k">${k}</span>
+    <span class="v ${cls || ''}">${v}</span><span class="n">${n || ''}</span></div>`;
+
+  h += `<div class="readouts" style="margin-bottom:20px">
+    ${cartao('Em experiência', emCurso.length, '',
+      'de ' + S.experiencia.length + ' na base')}
+    ${cartao('Decisões atrasadas', atrasadas.length, atrasadas.length ? 'crit' : 'good',
+      atrasadas.length ? 'prazo da CLT já venceu' : 'nenhuma fora do prazo')}
+    ${cartao('Vencem em até 7 dias', vencendo.length, vencendo.length ? 'warn' : '',
+      'decidir esta semana')}
+    ${cartao('Taxa de prorrogação', decProrr.length ? pct(prorrSim / decProrr.length) : '—', '',
+      prorrSim + ' de ' + decProrr.length + ' decididas aos ' + P.expP1 + ' dias')}
+    ${cartao('Taxa de efetivação',
+      decEfet.length ? pct(efetSim / decEfet.length) : '—',
+      decEfet.length && efetSim / decEfet.length < 0.7 ? 'warn' : '',
+      efetSim + ' de ' + decEfet.length + ' encerradas')}
+    ${cartao('Tempo médio de casa', casa.length ? d1(avg(casa)) + '<span class="u">d</span>' : '—', '',
+      'de quem ainda está em experiência')}
+  </div>`;
+
+  /* ---- efetivação por empresa ----
+     Barra, não pizza: a pergunta é comparar unidades entre si, e pizza só
+     responde "quanto de um todo". A meta entra como risco dentro da barra,
+     para não precisar de um segundo eixo. */
+  const porEmp = {};
+  TE.forEach(x => {
+    const e = (x.e.empresa || '').trim();
+    if (!e || !x.e.efetiv) return;
+    const o = porEmp[e] || (porEmp[e] = {n: 0, sim: 0});
+    o.n++; if (x.e.efetiv === 'SIM') o.sim++;
+  });
+  const emps = Object.entries(porEmp).sort((a, b) => (b[1].sim / b[1].n) - (a[1].sim / a[1].n));
+  const meta = S.params.metaEfetivacao != null ? S.params.metaEfetivacao : 0.7;
+  if (emps.length){
+    h += `<div class="sec"><div class="sec-head"><h2>Efetivação por empresa</h2>
+      <span class="eyebrow src">meta ${pct(meta)} · só quem já teve decisão</span></div>
+      <div class="bars curto">` + emps.map(([e, o]) => {
+        const t = o.sim / o.n;
+        return `<div class="brow"><div class="blab">${esc(e)}
+            <span class="co">${o.sim} de ${o.n}</span></div>
+          <div class="btrack">
+            <div class="bfill acc" style="width:${(t * 100).toFixed(1)}%"></div>
+            <div class="bmeta" style="left:${(meta * 100).toFixed(1)}%"></div></div>
+          <div class="bval ${t < meta ? 't-warn' : 't-good'}">${pct(t)}</div></div>`;
+      }).join('') + `</div>
+      <div class="hint">O risco cinza em cada barra é a meta. Quem fica à esquerda dele
+        está efetivando menos do que o combinado.</div></div>`;
+  }
+
+  /* ---- efetivação mês a mês ----
+     O mês de cada decisão é o mês em que o prazo dos 90 dias caiu, não o da
+     admissão: é quando a decisão de fato teve de ser tomada. */
+  const mesesE = ultimosMeses(12);
+  const baldeE = {};
+  TE.forEach(x => {
+    if (!x.e.efetiv || !x.c.lim2) return;
+    const m = x.c.lim2.slice(0, 7);
+    const o = baldeE[m] || (baldeE[m] = {n: 0, sim: 0});
+    o.n++; if (x.e.efetiv === 'SIM') o.sim++;
+  });
+  const serieE = mesesE.map(m => baldeE[m] ? Math.round(baldeE[m].sim / baldeE[m].n * 100) : null);
+  const totE = Object.values(baldeE).reduce((a, o) => a + o.n, 0);
+  if (totE){
+    h += `<div class="sec"><div class="sec-head"><h2>Efetivação mês a mês</h2>
+      <span class="eyebrow src">% efetivado · ${totE} decisão(ões) em 12 meses</span></div>
+      ${colunas(mesesE, serieE, v => v + '%')}
+      <div class="hint">Mês vazio é mês sem decisão vencendo, não efetivação zero.
+        Com poucos meses lançados o desenho ainda diz pouco — ele fica útil conforme o histórico cresce.</div></div>`;
+  }
+
+  h += `<div class="banner">Todo colaborador entra aqui, de qualquer empresa. Quando um processo chega a
+    <b>100% na aba Admissão</b>, o colaborador aparece nesta lista sozinho${auto ? ` — <b>${auto}</b> ${auto>1?'vieram':'veio'} por esse caminho` : ''}.
+    Data de admissão, nome, empresa, cargo e gestor <b>vêm da vaga</b>: corrigiu lá, corrige aqui sozinho.
+    As colunas <b>${P.expP1} dias</b> e <b>${P.expP2} dias</b> são a data-limite para cada decisão e ficam
+    vermelhas quando o prazo passa sem resposta. Contam a partir da admissão, com o dia da admissão como o 1º
+    (ajustável em Parâmetros).</div>`;
+
+  h += `<div class="grid-wrap"><table class="grid exp"><thead>
+    <tr><th class="grp a stG" colspan="5" style="left:0;width:${FX_LEFT._total}px">Identificação</th>
+        <th class="grp b" colspan="4">Período de experiência</th>
+        <th class="grp c" colspan="1">Automático</th>
+        <th class="grp d" colspan="1"></th></tr>
+    <tr>${thOrd('experiencia','empresa','Empresa','fx',fxEstilo('empresa'))}
+        ${thOrd('experiencia','gestor','Gestor','fx',fxEstilo('gestor'))}
+        ${thOrd('experiencia','cargo','Cargo','fx',fxEstilo('cargo'))}
+        ${thOrd('experiencia','nome','Colaborador','fx',fxEstilo('nome'))}
+        ${thOrd('experiencia','admissao','Admissão','fx fxfim',fxEstilo('admissao'))}
+        ${thOrd('experiencia','lim1',P.expP1+' dias','','min-width:150px')}
+        ${thOrd('experiencia','prorrog','Prorrogar?','','min-width:106px')}
+        ${thOrd('experiencia','lim2',P.expP2+' dias','','min-width:150px')}
+        ${thOrd('experiencia','efetiv','Efetivar?','','min-width:104px')}
+        ${thOrd('experiencia','diasCasa','Dias de casa','n','min-width:78px')}
+        <th style="min-width:34px"></th></tr></thead><tbody>`;
+
+  if (!linhasOrd.length) h += `<tr><td colspan="11"><div class="empty">Nenhum registro com esses filtros.</div></td></tr>`;
+  const prazo = (data, m) => data
+    ? `<span class="prazo p-${m.k}"><b>${fmtD(data)}</b><i>${m.t}</i></span>`
+    : '<i class="vaz">—</i>';
+  linhasOrd.forEach(({e,i,c}) => {
+    h += `<tr${autoriaAttr(e)}><td ${fx('empresa')}>${cBase(i,'empresa',e.empresa,'empresas')}</td>
+      <td ${fx('gestor')}>${cBase(i,'gestor',e.gestor,'gestores')}</td>
+      <td ${fx('cargo')}>${cBase(i,'cargo',e.cargo,'cargos')}</td>
+      <td ${fx('nome')}>${cWrap(i,'nome',e.nome)}</td>
+      <td ${fx('admissao','fxfim')}${e.idVaga ? ' data-vinc="1" title="Vem da aba Vagas — corrija lá e muda em todo lugar"' : ''}>${cDate(i,'admissao',e.admissao)}</td>
+      <td class="calc">${prazo(c.lim1, c.m1)}</td>
+      <td>${cSel(i,'prorrog',e.prorrog,['SIM','NÃO'])}</td>
+      <td class="calc">${c.semSegundo ? '<i class="vaz">não prorrogado</i>' : prazo(c.lim2, c.m2)}</td>
+      <td>${cSel(i,'efetiv',e.efetiv,['SIM','NÃO'])}</td>
+      <td class="calc n">${c.diasCasa==null?'':c.diasCasa}${e.idVaga ? ` <span class="origem" title="Veio da admissão ${esc(e.idVaga)}">↩</span>` : ''}</td>
+      <td class="calc"><button class="rowbtn" data-del="experiencia" data-i="${i}">✕</button></td></tr>`;
+  });
+  h += `</tbody></table></div>`;
+  document.getElementById('p-experiencia').innerHTML = h;
+}
+
+function renderParametros(){
+  const P = S.params;
+  const linha = (lab, campo, val, step) =>
+    `<div class="prow"><span>${lab}</span><input type="number" step="${step||1}" data-p="${campo}" value="${val}"></div>`;
+  let h = `<div class="params">
+    <div class="pbox"><h3>Régua de SLA — dias corridos acumulados desde a abertura</h3>` +
+    P.etapas.map((e,i) => `<div class="prow"><span>${e.n}. ${esc(e.nome)}</span>
+      <input type="number" min="0" data-sla-etapa="${i}" value="${e.sla}"></div>`).join('') +
+    `<div class="hint">O maior valor da lista vira o Time to Fill alvo — hoje <b>${Math.max(...P.etapas.map(e=>e.sla))} dias</b>. As três primeiras seguem a referência já usada: divulgação 2, triagem 5, parecer 10.</div></div>
+
+    <div><div class="pbox"><h3>Classificação de aging</h3>
+      ${linha('🟢 Saudável até (% do SLA total)','agingVerde',P.agingVerde,0.05)}
+      ${linha('🟡 Atenção até (% do SLA total)','agingAmarelo',P.agingAmarelo,0.05)}
+      <div class="hint">Use fração: 0,7 = 70%. Acima do segundo limite a vaga fica 🔴 crítica.</div></div>
+
+    <div class="pbox" style="margin-top:26px"><h3>Período de experiência</h3>
+      ${linha('1º período — 1ª avaliação (dias)','expP1',P.expP1)}
+      ${linha('Período total — 2ª avaliação (dias)','expP2',P.expP2)}
+      <div class="hint">A data de admissão conta como o 1º dia, então o limite é admissão + dias − 1. Convenção conferida contra a planilha antiga.</div></div>
+
+    <div class="pbox" style="margin-top:26px"><h3>Contratos de estágio</h3>
+      ${linha('Prazo do CIEE (dias úteis)','slaCiee',P.slaCiee == null ? 2 : P.slaCiee)}
+      <div class="hint">A data-limite é a solicitação + este número de dias úteis. Fins de semana e os
+        feriados cadastrados na aba Base ficam de fora da contagem.</div></div>
+
+    <div class="pbox" style="margin-top:26px"><h3>Uniformes</h3>
+      <div class="hint" style="border-top:0">Empresas que fornecem uniforme. Só admissões delas abrem linha na aba.</div>
+      ${S.listas.empresas.map(e => `<div class="prow" style="grid-template-columns:1fr 30px">
+        <span>${esc(e)}</span><input type="checkbox" data-pemp-uni="${esc(e)}"
+        ${(P.empresasUniforme||[]).includes(e) ? 'checked' : ''}></div>`).join('')}</div>
+
+    <div class="pbox" style="margin-top:26px"><h3>Integração</h3>
+      <div class="prow" style="grid-template-columns:1fr 190px"><span>Empresa controlada nesta aba</span>
+        <select data-pemp>${opts(S.listas.empresas, P.empresaIntegracao || '', 'todas as empresas')}</select></div>
+      <div class="hint">Só admissões dessa empresa alimentam a aba Integração. Deixe em branco para aceitar todas.</div></div>
+
+    <div class="pbox" style="margin-top:26px"><h3>Metas de gestão</h3>
+      ${linha('Cumprimento de SLA','metaSla',P.metaSla,0.05)}
+      ${linha('Efetivação em ' + P.expP2 + ' dias','metaEfetivacao',
+              P.metaEfetivacao == null ? 0.7 : P.metaEfetivacao, 0.05)}
+    </div>
+
+    <div class="pbox" style="margin-top:26px"><h3>Sincronização entre pessoas</h3>
+      <div class="hint">${sincLigada()
+        ? 'Ligada. O sistema grava num repositório privado do GitHub e traz o que a outra pessoa fizer. O conteúdo sobe cifrado.'
+        : 'Desligada. Ligue para você e mais alguém trabalharem na mesma base, cada uma no seu computador.'}</div>
+      <div class="prow" style="grid-template-columns:1fr auto">
+        <span>${sincLigada() ? esc(confSinc().repo) + ' · ' + esc(confSinc().arquivo) : 'Nenhum repositório configurado'}</span>
+        <button class="sm" id="p-sinc">${sincLigada() ? 'Alterar' : 'Configurar'}</button></div>
+    </div>
+
+    <div class="pbox" style="margin-top:26px"><h3>Pessoas com acesso</h3>
+      <div class="hint">${COFRE
+        ? 'O sistema está <b>protegido</b>. Cada pessoa entra com a própria senha, e os dados são gravados cifrados em AES-256 — sem senha não há leitura, nem pelo código da página.'
+        : 'O sistema está <b>aberto</b>: quem tiver o link vê tudo. Defina as senhas para poder publicar o endereço com segurança.'}</div>
+      <div class="prow" style="grid-template-columns:1fr auto">
+        <span>${COFRE
+          ? esc(quemSou()) + ' · ' + (ehAdmin() ? 'administradora' : 'equipe')
+            + ' — ' + usuarios().filter(u => u.ativo !== false).length + ' pessoa(s) com acesso'
+          : 'Sem senha definida'}</span>
+        <button class="sm" id="p-senha">${COFRE ? 'Ver pessoas' : 'Proteger com senha'}</button></div>
+    </div>
+
+    <div class="pbox" style="margin-top:26px"><h3>Piloto automático</h3>
+      <div class="hint">Com os dois ligados você não precisa clicar em nada: o sistema grava
+        sozinho quando você para de digitar e traz o que as outras fizeram enquanto você está
+        com tudo salvo. Ele nunca busca no meio da digitação, para a tela não mudar na sua mão.
+        Os botões <b>Salvar</b> e <b>Sincronizar</b> continuam valendo a qualquer momento.</div>
+      <div class="prow" style="grid-template-columns:1fr auto">
+        <label class="chk"><input type="checkbox" data-pauto="1"${S.params.autoSalvar !== false ? ' checked' : ''}>
+          Gravar sozinho ${Math.round(AUTO_MS/1000)} segundos depois da última alteração</label>
+        <span class="opc">${sincLigada() ? 'grava no repositório' : 'grava neste navegador'}</span></div>
+      <div class="prow" style="grid-template-columns:1fr auto">
+        <label class="chk"><input type="checkbox" data-pbuscar="1"${S.params.autoBuscar !== false ? ' checked' : ''}>
+          Buscar sozinho o que as outras gravaram, a cada ${Math.round(BUSCA_MS/1000)} segundos</label>
+        <span class="opc">${sincLigada() ? 'ligado ao repositório' : 'precisa da sincronização'}</span></div>
+    </div>
+
+    <div class="pbox" style="margin-top:26px"><h3>Versão do programa</h3>
+      <div class="hint">Quando alguém estiver com uma versão mais nova do sistema, esta aqui
+        <b>recusa gravar</b> em vez de apagar o que ela lançou em campos que esta versão ainda
+        não conhece. Se isso acontecer, é só apertar <b>Ctrl+Shift+R</b>.</div>
+      <div class="prow" style="grid-template-columns:1fr auto">
+        <span>Esta página é a versão <b>${VERSAO_APP}</b>${versaoRemota ? ' · o repositório está na <b>' + versaoRemota + '</b>' : ''}</span>
+        <span class="opc">${desatualizado ? 'desatualizada — atualize a página' : 'em dia'}</span></div>
+    </div>
+
+    ${!ehAdmin() ? '' : `<div class="pbox" style="margin-top:26px"><h3>Receber pacote de alterações</h3>
+      <div class="hint">Quem abre o sistema pelo link compartilhado não consegue gravar na cópia de todos —
+        é regra da plataforma. O trabalho dela fica no navegador dela e vem até você num pacote cifrado.
+        Cole aqui e eu mostro o que mudou antes de incorporar.</div>
+      <div class="prow" style="grid-template-columns:1fr auto"><span>Incorporar o trabalho de outra pessoa</span>
+        <button class="sm" id="p-receber">Receber pacote</button></div>
+    </div>
+
+    <div class="pbox" style="margin-top:26px"><h3>Zerar registros</h3>
+      <div class="hint">Apaga tudo o que está lançado em Vagas, Candidatos, Admissão, Experiência,
+        Integração, Contratos, Uniformes e nas anotações. <b>A Base e os parâmetros continuam intactos.</b>
+        Serve para começar do zero depois de testar. Não tem como desfazer — se quiser guardar o que está aí,
+        baixe o CSV de cada aba antes.</div>
+      <div class="prow" style="grid-template-columns:1fr auto">
+        <span>${COLECOES.reduce((n,c) => n + (S[c]||[]).length, 0)} registro(s) lançados hoje</span>
+        <button class="sm danger" id="p-zerar">Zerar registros</button></div>
+    </div>`}</div>
+  </div>`;
+  document.getElementById('p-parametros').innerHTML = h;
+}
+
+/* ============================================================ ORDENAR E FILTRAR */
+/* Uma ordenação só para todas as grades: clique no cabeçalho alterna
+   crescente → decrescente → ordem original. Vazios vão sempre para o fim. */
+function thOrd(tab, campo, rotulo, extra, estilo){
+  const at = (ui.sort[tab] && ui.sort[tab].campo === campo) ? ui.sort[tab].dir : '';
+  const seta = at === 'asc' ? '▲' : at === 'desc' ? '▼' : '';
+  return `<th class="ord ${extra||''}${at?' ativo':''}" data-ord="${tab}" data-campo="${campo}"` +
+    `${estilo?` style="${estilo}"`:''} title="Ordenar por ${esc(rotulo)}">` +
+    `<span class="thlab">${rotulo}</span><span class="seta">${seta}</span></th>`;
+}
+const vazio = v => v == null || v === '';
+function aplicarOrdem(tab, linhas, chaves){
+  const o = ui.sort[tab];
+  if (!o || !o.campo || !chaves[o.campo]) return linhas;
+  const get = chaves[o.campo], dir = o.dir === 'desc' ? -1 : 1;
+  return linhas.slice().sort((a, b) => {
+    const x = get(a), y = get(b);
+    if (vazio(x) && vazio(y)) return 0;
+    if (vazio(x)) return 1;
+    if (vazio(y)) return -1;
+    if (typeof x === 'number' && typeof y === 'number') return (x - y) * dir;
+    return String(x).localeCompare(String(y), 'pt-BR', {numeric:true, sensitivity:'base'}) * dir;
+  });
+}
+function cicloOrdem(tab, campo){
+  const o = ui.sort[tab];
+  if (!o || o.campo !== campo) ui.sort[tab] = {campo, dir:'asc'};
+  else if (o.dir === 'asc') ui.sort[tab] = {campo, dir:'desc'};
+  else delete ui.sort[tab];
+}
+/* Empresas que realmente aparecem na aba, para o menu não listar o que não existe. */
+function empresasDe(col, campo){
+  const usadas = new Set((S[col]||[]).map(r => r[campo]).filter(Boolean));
+  const naBase = S.listas.empresas;
+  const emUso = naBase.filter(e => usadas.has(e))
+    .concat([...usadas].filter(e => !naBase.includes(e)).sort((a,b)=>a.localeCompare(b,'pt-BR')));
+  return { emUso, outras: naBase.filter(e => !usadas.has(e)) };
+}
+function selEmpresa(tab, col, campo){
+  const atual = ui.emp[tab] || '';
+  const {emUso, outras} = empresasDe(col, campo);
+  const op = e => `<option${e===atual?' selected':''}>${esc(e)}</option>`;
+  let h = `<select data-emp="${tab}" title="Filtrar por empresa"><option value="">Todas as empresas</option>`;
+  /* Sem nenhuma empresa preenchida ainda, mostra a lista da Base para o filtro já servir. */
+  if (!emUso.length) h += outras.map(op).join('');
+  else {
+    h += `<optgroup label="Nesta aba">` + emUso.map(op).join('') + `</optgroup>`;
+    if (outras.length) h += `<optgroup label="Sem registro aqui">` + outras.map(op).join('') + `</optgroup>`;
+  }
+  return h + `</select>`;
+}
+const passaEmpresa = (tab, valor) => !ui.emp[tab] || valor === ui.emp[tab];
+/* Botão que devolve a grade à ordem original. */
+function btnOrdemPadrao(tab){
+  return ui.sort[tab] ? `<button class="sm" data-ordreset="${tab}" title="Voltar à ordem original">↺ ordem original</button>` : '';
+}
+
+/* ============================================================ CORES DE STATUS */
+/* Faixa ordinal para quem está andando; cor semântica para quem parou. */
+const COR_STATUS_VAGA = {
+  'ABORDAGENS':'t1', 'TRIAR':'t1',
+  'PRIMEIRA ETAPA':'t2', 'SEGUNDA ETAPA':'t2',
+  'FAZER PARECER':'t3', 'PARECER ENVIADO':'t3',
+  'FECHADA':'s-good',
+  'AGUARDAR':'s-warn', 'PRECISA ALINHAR':'s-warn',
+  'CONGELADA':'s-off', 'CANCELADA':'s-off',
+};
+const COR_STATUS_CAND = {
+  'Em triagem':'t1', 'Banco de talentos':'t1',
+  'Entrevista RH agendada':'t2', 'Entrevista RH realizada':'t2',
+  'Parecer enviado':'t3', 'Entrevista gestor agendada':'t3', 'Entrevista gestor realizada':'t3',
+  'Aprovado(a)':'s-good',
+  'Reprovado(a)':'s-crit',
+  'Não compareceu':'s-ser',
+  'Sem retorno':'s-off', 'Não possui interesse':'s-off',
+  'Já está trabalhando':'s-off', 'Desistiu':'s-off',
+};
+const COR_LISTA = { statusVaga: COR_STATUS_VAGA, statusCand: COR_STATUS_CAND };
+/* A paleta oferecida na Base. As classes já existem no CSS e foram desenhadas
+   para os dois temas — por isso a escolha é entre cores prontas, e não um
+   seletor livre: cor escolhida no claro costuma ficar ilegível no escuro. */
+const PALETA = [
+  ['',        'Padrão'],
+  ['s-good',  'Verde'],
+  ['s-warn',  'Amarelo'],
+  ['s-ser',   'Laranja'],
+  ['s-crit',  'Vermelho'],
+  ['s-azul',  'Azul'],
+  ['s-roxo',  'Roxo'],
+  ['s-teal',  'Verde-água'],
+  ['s-rosa',  'Rosa'],
+  ['t1',      'Cinza claro'],
+  ['t2',      'Cinza médio'],
+  ['t3',      'Cinza escuro'],
+  ['s-off',   'Neutro'],
+];
+const coresDe = lk => (S.params.cores && S.params.cores[lk]) || {};
+function guardarCor(lk, v, classe){
+  if (!S.params.cores) S.params.cores = {};
+  if (!S.params.cores[lk]) S.params.cores[lk] = {};
+  if (classe) S.params.cores[lk][v] = classe;
+  else delete S.params.cores[lk][v];
+}
+/* Status que ela criar depois entra como neutro — nada quebra. */
+function corStatus(lk, v){
+  if (!v) return '';
+  const escolhida = coresDe(lk)[v];
+  if (escolhida) return escolhida;
+  const mapa = COR_LISTA[lk] || {};
+  return mapa[v] || 's-off';
+}
+/* Célula editável que carrega a própria cor do status. */
+const cStt = (i,f,v,lista,lk) =>
+  `<select class="cell stt ${corStatus(lk, v)}" data-i="${i}" data-f="${f}" data-base="${lk}">${
+    opts(lista, v)}<option value="__novo__">＋ cadastrar novo…</option></select>`;
+
+/* Os últimos doze meses, como rótulo AAAA-MM. Serve aos gráficos de
+   evolução das abas, do mesmo jeito que o Painel já faz. */
+function ultimosMeses(n){
+  const fora = [];
+  for (let i = n - 1; i >= 0; i--){
+    const d = new Date(HOJE.getFullYear(), HOJE.getMonth() - i, 1);
+    fora.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
+  }
+  return fora;
+}
+/* O desenho de colunas, em um lugar só: as duas abas usam o mesmo. */
+function colunas(meses, valores, rotulo){
+  const validos = valores.filter(v => v != null);
+  const topo = validos.length ? Math.max(...validos) : 0;
+  return `<div class="cols" style="grid-template-columns:repeat(${meses.length},1fr)">` +
+    valores.map((v, i) => `<div class="colb" title="${esc(meses[i])}${
+        v == null ? ' — sem dado' : ' — ' + rotulo(v)}">
+      <span class="cv">${v == null ? '' : rotulo(v)}</span>
+      <div class="fill" style="height:${v == null ? 0
+        : Math.max(topo ? v / topo * 100 : 0, 1.5).toFixed(1)}%"></div></div>`).join('') +
+    `</div><div class="col-labels" style="grid-template-columns:repeat(${meses.length},1fr)">` +
+    meses.map(m => `<span>${m.slice(5)}/${m.slice(2, 4)}</span>`).join('') + `</div>`;
+}
+
+/* ============================================================ MÓDULOS */
+function vagaPorId(id){ return S.vagas.find(v => v.id === id) || null; }
+
+function calcAdm(a){
+  const itens = a.itens || [];
+  const total = itens.filter(x => x && x !== 'N/A').length;
+  const sim = itens.filter(x => x === 'SIM').length;
+  const c = { pct: total ? sim/total : 0, pendentes: itens.filter(x => x === 'NÃO').length };
+  const k = itens.findIndex(x => x === 'NÃO');
+  c.proxima = k < 0 ? '— tudo concluído' : (S.listas.checklist[k] || 'item '+(k+1));
+  const v = vagaPorId(a.idVaga);
+  c.empresa = v ? v.empresa : '';
+  c.cargo = v ? v.cargo : '';
+  c.gestor = v ? v.gestor : '';
+  c.substituido = v ? v.substituido : '';
+  c.pessoa = v ? v.aprovado : '';
+  c.inicio = v ? v.inicio : null;
+  const faltam = c.inicio ? difD(iso(HOJE), c.inicio) : null;
+  c.situacao = c.pct >= 1 ? {k:'good', t:'Concluída'}
+    : faltam == null ? {k:'neut', t:'Em andamento'}
+    : faltam < 0 ? {k:'crit', t:'Admitido com pendência'}
+    : faltam <= 5 ? {k:'warn', t:'Início em '+faltam+'d'}
+    : {k:'neut', t:'Em andamento'};
+  return c;
+}
+
+function renderAdmissao(){
+  const linhas = S.admissao.map((a,i) => ({a, i, c: calcAdm(a)})).filter(({a,c}) => {
+    if (ui.aFiltro === 'pendentes' && c.pct >= 1) return false;
+    if (!passaEmpresa('admissao', c.empresa)) return false;
+    if (ui.aBusca){ const q = ui.aBusca.toLowerCase();
+      if (!((c.pessoa||'')+' '+(c.cargo||'')+' '+(c.empresa||'')+' '+(c.substituido||'')+' '+(c.gestor||'')+' '+a.idVaga)
+            .toLowerCase().includes(q)) return false; }
+    return true;
+  /* Ordem estável: marcar uma tarefa não pode fazer a linha pular de lugar. */
+  }).sort((x,y) => (x.c.inicio||'9999').localeCompare(y.c.inicio||'9999') || x.a.idVaga.localeCompare(y.a.idVaga));
+  const linhasOrd = aplicarOrdem('admissao', linhas, {
+    idVaga:(r)=>r.a.idVaga, empresa:(r)=>r.c.empresa, cargo:(r)=>r.c.cargo, gestor:(r)=>r.c.gestor,
+    substituido:(r)=>r.c.substituido, pessoa:(r)=>r.c.pessoa, inicio:(r)=>r.c.inicio,
+    pct:(r)=>r.c.pct, proxima:(r)=>r.c.proxima, situacao:(r)=>r.c.situacao.t,
+  });
+  calcularFixasAdm(linhasOrd);
+  const CL = S.listas.checklist;
+
+  let h = `<div class="toolbar">
+    <div class="chips">${['pendentes','todas'].map(f=>`<button class="chip-btn" data-af="${f}"
+      aria-pressed="${ui.aFiltro===f}">${{pendentes:'Em andamento',todas:'Todas'}[f]}</button>`).join('')}</div>
+    ${selEmpresa('admissao','vagas','empresa')}
+    <input type="search" id="a-busca" placeholder="Buscar vaga, colaborador ou gestor…" value="${esc(ui.aBusca)}">
+    <button class="sm" id="a-lancar" title="Abre a admissão de toda vaga já fechada que ainda não tem processo">Lançar admissões</button>
+    ${btnOrdemPadrao('admissao')}
+    <span class="count">${linhasOrd.length} de ${S.admissao.length}</span></div>`;
+  h += `<div class="banner">O processo nasce sozinho quando você fecha a vaga — empresa, cargo, gestor,
+    substituição, colaborador e data de início vêm de lá. Marque cada tarefa como SIM, NÃO ou N/A: o percentual
+    e a próxima pendência se calculam sozinhos. Fechar a vaga também abre, quando for o caso,
+    a integração, o contrato de estágio e o uniforme. Os nomes das tarefas ficam na aba Base.</div>`;
+
+  h += `<div class="grid-wrap"><table class="grid adm"><thead>
+    <tr><th class="grp a stG" colspan="7" style="left:0;width:${FX_LEFT._total}px">Identificação</th>
+        <th class="grp c" colspan="3">Progresso — automático</th>
+        <th class="grp b" colspan="${CL.length}">Checklist do processo admissional</th>
+        <th class="grp d" colspan="1"></th></tr>
+    <tr>${thOrd('admissao','idVaga','Vaga','fx',fxEstilo('idVaga'))}
+        ${thOrd('admissao','empresa','Empresa','fx',fxEstilo('empresa'))}
+        ${thOrd('admissao','cargo','Cargo','fx',fxEstilo('cargo'))}
+        ${thOrd('admissao','gestor','Gestor','fx',fxEstilo('gestor'))}
+        ${thOrd('admissao','substituido','Substituição','fx',fxEstilo('substituido'))}
+        ${thOrd('admissao','pessoa','Colaborador','fx',fxEstilo('pessoa'))}
+        ${thOrd('admissao','inicio','Início','fx fxfim',fxEstilo('inicio'))}
+        ${thOrd('admissao','situacao','Situação','','min-width:170px')}
+        ${thOrd('admissao','pct','Conclusão','','min-width:132px')}
+        ${thOrd('admissao','proxima','Próxima pendência','','min-width:190px')}`;
+  CL.forEach(t => h += `<th class="vert" title="${esc(t)}"><span>${esc(t)}</span></th>`);
+  h += `<th style="min-width:34px"></th></tr></thead><tbody>`;
+
+  if (!linhasOrd.length) h += `<tr><td colspan="${11+CL.length}"><div class="empty">Nenhum processo com esses filtros.</div></td></tr>`;
+  linhasOrd.forEach(({a,i,c}) => {
+    const nada = '<i class="vaz">—</i>';
+    h += `<tr${autoriaAttr(a)}><td ${fx('idVaga')}>${cLista(i,'idVaga',a.idVaga,'vagas')}</td>
+      <td ${fx('empresa','calc quebra')}>${esc(c.empresa) || nada}</td>
+      <td ${fx('cargo','calc quebra')}>${esc(c.cargo) || nada}</td>
+      <td ${fx('gestor','calc quebra')}>${esc(c.gestor) || nada}</td>
+      <td ${fx('substituido','calc quebra')}>${esc(c.substituido) || nada}</td>
+      <td ${fx('pessoa','calc quebra')}>${esc(c.pessoa) || nada}</td>
+      <td ${fx('inicio','calc fxfim')}>${fmtD(c.inicio) || nada}</td>
+      <td class="calc cel-situacao"><span class="pill ${c.situacao.k}">${c.situacao.t}</span></td>
+      <td class="calc n cel-pct">${barraPct(c.pct)}</td>
+      <td class="calc cel-prox">${esc(c.proxima)}</td>`;
+    CL.forEach((t, k) => {
+      const val = a.itens[k] || '';
+      const cls = val==='SIM' ? 'ck-sim' : val==='NÃO' ? 'ck-nao' : val==='N/A' ? 'ck-na' : '';
+      h += `<td class="ckcell"><button class="ck ${cls}" data-ck="${i}" data-k="${k}"
+        title="${esc(t)} — ${val||'não definido'}">${val==='SIM'?'✓':val==='NÃO'?'·':val==='N/A'?'–':''}</button></td>`;
+    });
+    h += `<td class="calc"><button class="rowbtn" data-del="admissao" data-i="${i}">✕</button></td></tr>`;
+  });
+  h += `</tbody></table></div>
+    <div class="legenda">
+      <span class="lg-tit">Conclusão</span>
+      <span class="lg"><i class="m-crit"></i> até 24%</span>
+      <span class="lg"><i class="m-ser"></i> 25 a 49%</span>
+      <span class="lg"><i class="m-warn"></i> 50 a 74%</span>
+      <span class="lg"><i class="m-good"></i> 75% ou mais</span>
+      <span class="lg" style="margin-left:8px">Clique numa célula do checklist para alternar entre NÃO → SIM → N/A.</span>
+    </div>`;
+  document.getElementById('p-admissao').innerHTML = h;
+}
+
+function calcIntegr(g){
+  if (g.feito === 'SIM') return {k:'good', t:'Realizada', pendente:false,
+    dias: (g.admissao && g.dataIntegr) ? difD(g.admissao, g.dataIntegr) : null};
+  /* N/A: quem foi desligado, desistiu ou nunca entrou não fica na fila de pendências. */
+  if (g.feito === 'N/A') return {k:'neut', t:'Não se aplica', pendente:false, dias:null};
+  if (!g.admissao) return {k:'neut', t:'Sem data de admissão', pendente:true, dias:null};
+  const d = desdeHoje(g.admissao);
+  return { dias:null, pendente:true,
+    ...(d > 30 ? {k:'crit', t:'Pendente há '+d+'d'} : {k:'warn', t:'Pendente'}) };
+}
+function renderIntegracao(){
+  const L = S.listas, alvo = (S.params.empresaIntegracao || '').trim();
+  const linhas = S.integracao.map((g,i) => ({g, i, c: calcIntegr(g)})).filter(({g,c}) => {
+    if (ui.iFiltro === 'pendentes' && !c.pendente) return false;
+    if (!passaEmpresa('integracao', g.empresa)) return false;
+    if (ui.iDe && (!g.admissao || g.admissao < ui.iDe)) return false;
+    if (ui.iAte && (!g.admissao || g.admissao > ui.iAte)) return false;
+    if (ui.iBusca && !((g.nome||'')+' '+(g.setor||'')+' '+(g.gestor||'')).toLowerCase().includes(ui.iBusca.toLowerCase())) return false;
+    return true;
+  }).sort((a,b) => (a.g.admissao||'9999').localeCompare(b.g.admissao||'9999') ||
+                   (a.g.nome||'').localeCompare(b.g.nome||'', 'pt-BR'));
+  const linhasOrd = aplicarOrdem('integracao', linhas, {
+    admissao:(r)=>r.g.admissao, empresa:(r)=>r.g.empresa, nome:(r)=>r.g.nome, setor:(r)=>r.g.setor,
+    gestor:(r)=>r.g.gestor, feito:(r)=>r.g.feito, dataIntegr:(r)=>r.g.dataIntegr,
+    dias:(r)=>r.c.dias, situacao:(r)=>r.c.t, obs:(r)=>r.g.obs,
+  });
+  calcularFixasInt(linhasOrd);
+  const semEmpresa = S.integracao.filter(g => !g.empresa).length;
+  const auto = S.integracao.filter(g => g.idVaga).length;
+  const comData = ui.iDe || ui.iAte;
+
+  let h = `<div class="toolbar">
+    <div class="chips">${['pendentes','todas'].map(f=>`<button class="chip-btn" data-if="${f}"
+      aria-pressed="${ui.iFiltro===f}">${{pendentes:'Pendentes',todas:'Todas'}[f]}</button>`).join('')}</div>
+    ${selEmpresa('integracao','integracao','empresa')}
+    <span class="perioddo"><label>Admissão de</label>
+      <input type="date" data-int-de value="${esc(ui.iDe||'')}">
+      <label>até</label>
+      <input type="date" data-int-ate value="${esc(ui.iAte||'')}">
+      ${comData ? `<button class="sm ghost" data-int-limpa title="Limpar o período">✕</button>` : ''}</span>
+    <input type="search" id="i-busca" placeholder="Buscar colaborador, setor ou gestor…" value="${esc(ui.iBusca)}">
+    <button class="sm" id="i-lancar" title="Traz da Admissão todo mundo que ainda não está aqui">Lançar integrações</button>
+    <button class="sm" id="i-add">+ Novo colaborador</button>
+    ${btnOrdemPadrao('integracao')}
+    <span class="count">${linhasOrd.length} de ${S.integracao.length}</span></div>`;
+
+  h += `<div class="banner">Esta aba é o controle de <b>${esc(alvo) || 'uma empresa só'}</b>.
+    O colaborador entra aqui <b>sozinho</b>, assim que a vaga é fechada e o nome do aprovado está
+    preenchido${auto ? `; <b>${auto}</b> ${auto>1?'vieram':'veio'} assim` : ''} — você não precisa lançar nada.
+    Admissão de outra empresa não entra. A empresa desta aba é definida em Parâmetros.
+    <br>Data de admissão, nome, empresa, setor e gestor <b>vêm da vaga</b>: corrigiu lá, corrige aqui sozinho.
+    A bolinha vermelha na célula marca os campos que a vaga manda.
+    ${semEmpresa ? `<br><b>${semEmpresa}</b> ${semEmpresa>1?'registros vieram':'registro veio'} do histórico sem empresa preenchida —
+      <button class="sm" data-int-preencher style="margin-left:4px">marcar como ${esc(alvo)}</button>` : ''}</div>`;
+
+  h += `<div class="grid-wrap"><table class="grid int"><thead>
+    <tr><th class="grp a stG" colspan="3" style="left:0;width:${FX_LEFT._total}px">Identificação</th>
+        <th class="grp b" colspan="4">Integração</th>
+        <th class="grp c" colspan="2">Automático</th>
+        <th class="grp d" colspan="2">Apoio</th></tr>
+    <tr>${thOrd('integracao','admissao','Admissão','fx',fxEstilo('admissao'))}
+        ${thOrd('integracao','empresa','Empresa','fx',fxEstilo('empresa'))}
+        ${thOrd('integracao','nome','Colaborador','fx fxfim',fxEstilo('nome'))}
+        ${thOrd('integracao','setor','Setor','','min-width:170px')}
+        ${thOrd('integracao','gestor','Gestor / reporte','','min-width:150px')}
+        ${thOrd('integracao','feito','Feito?','','min-width:88px')}
+        ${thOrd('integracao','dataIntegr','Data da integração','','min-width:130px')}
+        ${thOrd('integracao','dias','Dias','n','min-width:64px')}
+        ${thOrd('integracao','situacao','Situação','','min-width:180px')}
+        ${thOrd('integracao','obs','Observações','','min-width:240px')}
+        <th style="min-width:34px"></th></tr></thead><tbody>`;
+
+  if (!linhasOrd.length) h += `<tr><td colspan="11"><div class="empty">Nenhum registro com esses filtros.</div></td></tr>`;
+  linhasOrd.forEach(({g,i,c}) => {
+    h += `<tr${autoriaAttr(g)}><td ${fx('admissao')}${g.idVaga ? ' data-vinc="1" title="Vem da aba Vagas — corrija lá e muda em todo lugar"' : ''}>${cDate(i,'admissao',g.admissao)}</td>
+      <td ${fx('empresa')}>${cBase(i,'empresa',g.empresa,'empresas')}</td>
+      <td ${fx('nome','fxfim')}>${cWrap(i,'nome',g.nome)}</td>
+      <td>${cBase(i,'setor',g.setor,'departamentos')}</td>
+      <td>${cBase(i,'gestor',g.gestor,'gestores')}</td>
+      <td>${cSel(i,'feito',g.feito,['SIM','NÃO','N/A'])}</td>
+      <td>${cDate(i,'dataIntegr',g.dataIntegr)}</td>
+      <td class="calc n">${c.dias==null?'':c.dias}</td>
+      <td class="calc"><span class="pill ${c.k}">${c.t}</span>${g.idVaga ? ` <span class="origem" title="Veio da admissão ${esc(g.idVaga)}">↩</span>` : ''}</td>
+      <td>${cWrap(i,'obs',g.obs)}</td>
+      <td class="calc"><button class="rowbtn" data-del="integracao" data-i="${i}">✕</button></td></tr>`;
+  });
+  h += `</tbody></table></div>`;
+  document.getElementById('p-integracao').innerHTML = h;
+}
+
+function calcContrato(k){
+  const c = {}, sla = S.params.slaCiee || 2;
+  /* O limite do CIEE é calculado, não digitado: solicitação + 2 dias úteis. */
+  c.limite = k.solic ? somarDiasUteis(k.solic, sla) : null;
+  c.diasRetorno = (k.solic && k.retorno) ? diasUteisEntre(k.solic, k.retorno) : null;
+  c.diasAssin = (k.retorno && k.assinado) ? diasUteisEntre(k.retorno, k.assinado) : null;
+  if (!k.solic) c.sla = {k:'neut', t:'—'};
+  else if (!k.retorno){
+    const rest = diasUteisEntre(iso(HOJE), c.limite);
+    c.sla = rest < 0 ? {k:'crit', t:'atrasado há '+(-rest)+'d úteis'}
+          : rest === 0 ? {k:'warn', t:'vence hoje'}
+          : {k:'ok', t:'faltam '+rest+'d úteis'};
+  } else {
+    c.sla = c.diasRetorno <= sla ? {k:'good', t:'no prazo ('+c.diasRetorno+'d)'}
+                                 : {k:'crit', t:(c.diasRetorno-sla)+'d além do prazo'};
+  }
+  c.situacao = !k.nome ? {k:'neut', t:'—'}
+    : k.assinado ? {k:'good', t:'Assinado'}
+    : k.retorno ? {k:'warn', t:'Aguardando assinatura'} : {k:'warn', t:'Aguardando CIEE'};
+  return c;
+}
+function renderContratos(){
+  const sla = S.params.slaCiee || 2;
+  const linhas = S.contratos.map((k,i) => ({k, i, c: calcContrato(k)})).filter(({k}) => {
+    if (ui.kFiltro === 'abertos' && k.assinado) return false;
+    if (!passaEmpresa('contratos', k.empresa)) return false;
+    if (ui.kDe && (!k.solic || k.solic < ui.kDe)) return false;
+    if (ui.kAte && (!k.solic || k.solic > ui.kAte)) return false;
+    if (ui.kBusca && !((k.nome||'')+' '+(k.faculdade||'')+' '+(k.empresa||'')).toLowerCase().includes(ui.kBusca.toLowerCase())) return false;
+    return true;
+  }).sort((a,b) => (b.k.solic||'').localeCompare(a.k.solic||''));
+  const linhasOrd = aplicarOrdem('contratos', linhas, {
+    empresa:(r)=>r.k.empresa, nome:(r)=>r.k.nome, faculdade:(r)=>r.k.faculdade,
+    solic:(r)=>r.k.solic, limite:(r)=>r.c.limite, retorno:(r)=>r.k.retorno,
+    diasRetorno:(r)=>r.c.diasRetorno, sla:(r)=>r.c.sla.t, assinado:(r)=>r.k.assinado,
+    diasAssin:(r)=>r.c.diasAssin, situacao:(r)=>r.c.situacao.t, obs:(r)=>r.k.obs,
+  });
+  calcularFixasCon(linhasOrd);
+  const comData = ui.kDe || ui.kAte;
+
+  /* Desempenho por instituição — é o motivo de existir desta aba. */
+  const porInst = {};
+  S.contratos.forEach(k => {
+    const nome = (k.faculdade || '').trim();
+    if (!nome) return;
+    const c = calcContrato(k);
+    const o = porInst[nome] || (porInst[nome] = {n:0, assin:[], retornos:[]});
+    o.n++;
+    if (c.diasAssin != null) o.assin.push(c.diasAssin);
+    if (c.diasRetorno != null) o.retornos.push(c.diasRetorno);
+  });
+  const inst = Object.entries(porInst).sort((a,b) =>
+    (avg(b[1].assin) ?? -1) - (avg(a[1].assin) ?? -1) || b[1].n - a[1].n);
+
+  const ret = S.contratos.map(k => calcContrato(k).diasRetorno).filter(x => x != null);
+  const foraPrazo = ret.filter(x => x > sla).length;
+
+  let h = `<div class="toolbar">
+    <div class="chips">${['abertos','todos'].map(f=>`<button class="chip-btn" data-kf="${f}"
+      aria-pressed="${ui.kFiltro===f}">${{abertos:'Em aberto',todos:'Todos'}[f]}</button>`).join('')}</div>
+    ${selEmpresa('contratos','contratos','empresa')}
+    <span class="perioddo"><label>Solicitação de</label>
+      <input type="date" data-con-de value="${esc(ui.kDe||'')}">
+      <label>até</label>
+      <input type="date" data-con-ate value="${esc(ui.kAte||'')}">
+      ${comData ? `<button class="sm ghost" data-con-limpa title="Limpar o período">✕</button>` : ''}</span>
+    <input type="search" id="k-busca" placeholder="Buscar estagiário, instituição ou empresa…" value="${esc(ui.kBusca)}">
+    <button class="sm" id="k-lancar" title="Traz da Admissão todo estagiário que ainda não está aqui">Lançar contratos</button>
+    <button class="sm" id="k-add">+ Novo contrato</button>
+    ${btnOrdemPadrao('contratos')}
+    <span class="count">${linhasOrd.length} de ${S.contratos.length}</span></div>`;
+
+  h += `<div class="banner">Esta aba controla o <b>retorno do CIEE</b> e o <b>tempo de assinatura das
+    instituições</b>. A <b>data-limite</b> é calculada sozinha: solicitação + <b>${sla} dias úteis</b>, pulando
+    fim de semana e os feriados cadastrados na Base. Os prazos abaixo também são contados em dias úteis.
+    A linha nasce aqui sozinha quando uma vaga de <b>cargo de estágio</b> é fechada — de qualquer empresa.
+    Cargo que não é de estágio não entra.</div>`;
+
+  /* Furar o prazo é furar o prazo: conta quem voltou atrasado e quem ainda
+     não voltou e já passou da data. Separar os dois escondia metade. */
+  const reais = S.contratos.filter(k => k.nome && k.solic);
+  const abertos = reais.filter(k => !k.assinado);
+  const semRetorno = abertos.filter(k => !k.retorno);
+  const aguardAssin = abertos.filter(k => k.retorno).length;
+  const voltouTarde = reais.filter(k => { const c = calcContrato(k);
+    return c.diasRetorno != null && c.diasRetorno > sla; });
+  const devendoTarde = semRetorno.filter(k => calcContrato(k).sla.k === 'crit');
+  const furaram = voltouTarde.length + devendoTarde.length;
+  const comRetorno = reais.filter(k => calcContrato(k).diasRetorno != null);
+  const noPrazo = comRetorno.length - voltouTarde.length;
+
+  /* Daqui para baixo é leitura, não lançamento: tudo vai para `analise` e
+     entra na tela depois da grade. */
+  let analise = `<div class="readouts" style="margin:26px 0 20px">
+    <div class="readout"><span class="k">Contratos em aberto</span>
+      <span class="v">${abertos.length}</span>
+      <span class="n">${semRetorno.length} no CIEE · ${aguardAssin} para assinar</span></div>
+    <div class="readout"><span class="k">Fora do prazo do CIEE</span>
+      <span class="v ${furaram ? 'crit' : 'good'}">${furaram}</span>
+      <span class="n">${furaram
+        ? voltouTarde.length + ' voltaram atrasados · ' + devendoTarde.length + ' ainda devendo'
+        : 'nenhum passou dos ' + sla + 'd úteis'}</span></div>
+    <div class="readout"><span class="k">Retorno médio do CIEE</span>
+      <span class="v ${avg(ret) > sla ? 'warn' : 'good'}">${d1(avg(ret))}<span class="u">d</span></span>
+      <span class="n">dias úteis · meta ${sla} · n = ${ret.length}</span></div>
+    <div class="readout"><span class="k">Pior retorno</span>
+      <span class="v">${ret.length ? Math.max(...ret) : '—'}<span class="u">d</span></span>
+      <span class="n">dias úteis</span></div>
+    <div class="readout"><span class="k">Cumprimento do prazo</span>
+      <span class="v ${comRetorno.length && noPrazo/comRetorno.length < 0.7 ? 'crit' : 'good'}">${
+        comRetorno.length ? pct(noPrazo/comRetorno.length) : '—'}</span>
+      <span class="n">${noPrazo} de ${comRetorno.length} voltaram dentro de ${sla}d</span></div>
+    <div class="readout"><span class="k">Assinatura média da instituição</span>
+      <span class="v">${d1(avg(S.contratos.map(k=>calcContrato(k).diasAssin).filter(x=>x!=null)))}<span class="u">d</span></span>
+      <span class="n">do retorno até o contrato assinado</span></div>
+  </div>
+  <div class="hint" style="margin:-14px 0 20px">Os números acima e os gráficos abaixo consideram
+    <b>todos os ${S.contratos.length} contratos</b>, abertos e fechados. O filtro do topo vale
+    só para a tabela.</div>`;
+
+  /* ---- retorno médio por instituição ----
+     Comparação de grandeza entre categorias: barra horizontal, uma cor só,
+     ordenada da pior para a melhor. O risco marca o prazo combinado. */
+  const barras = inst.map(([nome, o]) => ({nome, n: o.n, m: avg(o.retornos)}))
+    .filter(x => x.m != null).sort((a, b) => b.m - a.m);
+  if (barras.length){
+    const pior = Math.max(sla, ...barras.map(x => x.m));
+    analise += `<div class="sec"><div class="sec-head"><h2>Retorno médio por instituição</h2>
+      <span class="eyebrow src">dias úteis da solicitação até o retorno · prazo ${sla}d</span></div>
+      <div class="bars curto">` + barras.map(x =>
+        `<div class="brow"><div class="blab">${esc(x.nome)}
+            <span class="co">${x.n} contrato${x.n > 1 ? 's' : ''}</span></div>
+          <div class="btrack">
+            <div class="bfill acc" style="width:${(x.m / pior * 100).toFixed(1)}%"></div>
+            <div class="bmeta" style="left:${(sla / pior * 100).toFixed(1)}%"></div></div>
+          <div class="bval ${x.m > sla ? 't-crit' : 't-good'}">${d1(x.m)}d</div></div>`).join('')
+      + `</div>
+      <div class="hint">O risco cinza é o prazo de ${sla} dias úteis. Barra que passa dele
+        é instituição que atrasa — é com ela que vale conversar.</div></div>`;
+  }
+
+  /* ---- o retorno está melhorando ou piorando? ---- */
+  const mesesK = ultimosMeses(12);
+  const baldeK = {};
+  S.contratos.forEach(k => {
+    const c = calcContrato(k);
+    if (!k.solic || c.diasRetorno == null) return;
+    (baldeK[k.solic.slice(0, 7)] || (baldeK[k.solic.slice(0, 7)] = [])).push(c.diasRetorno);
+  });
+  const serieK = mesesK.map(m => baldeK[m] ? avg(baldeK[m]) : null);
+  const totK = Object.values(baldeK).reduce((a, v) => a + v.length, 0);
+  if (totK){
+    analise += `<div class="sec"><div class="sec-head"><h2>Retorno do CIEE mês a mês</h2>
+      <span class="eyebrow src">média de dias úteis · ${totK} contrato(s) com retorno · prazo ${sla}d</span></div>
+      ${colunas(mesesK, serieK, v => d1(v))}
+      <div class="hint">Coluna mais alta é mês que demorou mais. O mês entra pela data da
+        <b>solicitação</b>, para a demora aparecer no mês em que ela começou.</div></div>`;
+  }
+
+  h += `<div class="grid-wrap"><table class="grid con"><thead>
+    <tr><th class="grp a stG" colspan="3" style="left:0;width:${FX_LEFT._total}px">Identificação</th>
+        <th class="grp b" colspan="2">Solicitação</th>
+        <th class="grp c" colspan="3">Retorno do CIEE — meta ${sla} dias úteis</th>
+        <th class="grp b" colspan="2">Assinatura da instituição</th>
+        <th class="grp d" colspan="2">Situação</th></tr>
+    <tr>${thOrd('contratos','empresa','Empresa','fx',fxEstilo('empresa'))}
+        ${thOrd('contratos','nome','Estagiário(a)','fx',fxEstilo('nome'))}
+        ${thOrd('contratos','faculdade','Instituição','fx fxfim',fxEstilo('faculdade'))}
+        ${thOrd('contratos','solic','Solicitação','','min-width:124px')}
+        ${thOrd('contratos','limite','Limite CIEE','','min-width:150px')}
+        ${thOrd('contratos','retorno','Retorno','','min-width:124px')}
+        ${thOrd('contratos','diasRetorno','Dias úteis','n','min-width:74px')}
+        ${thOrd('contratos','sla','Prazo','','min-width:160px')}
+        ${thOrd('contratos','assinado','Assinatura','','min-width:124px')}
+        ${thOrd('contratos','diasAssin','Dias úteis','n','min-width:74px')}
+        ${thOrd('contratos','situacao','Situação','','min-width:170px')}
+        ${thOrd('contratos','obs','Observações','','min-width:200px')}
+        <th style="min-width:34px"></th></tr></thead><tbody>`;
+
+  if (!linhasOrd.length) h += `<tr><td colspan="13"><div class="empty">Nenhum contrato com esses filtros.</div></td></tr>`;
+  linhasOrd.forEach(({k,i,c}) => {
+    h += `<tr${autoriaAttr(k)}><td ${fx('empresa')}>${cBase(i,'empresa',k.empresa,'empresas')}</td>
+      <td ${fx('nome')}>${cWrap(i,'nome',k.nome)}</td>
+      <td ${fx('faculdade','fxfim')}>${cBase(i,'faculdade',k.faculdade,'instituicoes')}</td>
+      <td>${cDate(i,'solic',k.solic)}</td>
+      <td class="calc">${c.limite ? `<span class="prazo p-${c.sla.k}"><b>${fmtD(c.limite)}</b></span>` : '<i class="vaz">preencha a solicitação</i>'}</td>
+      <td>${cDate(i,'retorno',k.retorno)}</td>
+      <td class="calc n">${c.diasRetorno==null?'':c.diasRetorno}</td>
+      <td class="calc"><span class="pill ${c.sla.k==='ok'?'neut':c.sla.k}">${c.sla.t}</span></td>
+      <td>${cDate(i,'assinado',k.assinado)}</td>
+      <td class="calc n">${c.diasAssin==null?'':c.diasAssin}</td>
+      <td class="calc"><span class="pill ${c.situacao.k}">${c.situacao.t}</span>${k.idVaga ? ` <span class="origem" title="Veio da admissão ${esc(k.idVaga)}">↩</span>` : ''}</td>
+      <td>${cWrap(i,'obs',k.obs)}</td>
+      <td class="calc"><button class="rowbtn" data-del="contratos" data-i="${i}">✕</button></td></tr>`;
+  });
+  h += `</tbody></table></div>`;
+
+  h += analise;
+
+  if (inst.length){
+    h += `<div class="sec"><div class="sec-head"><h2>Desempenho por instituição</h2>
+      <span class="eyebrow src">${inst.length} instituições · dias úteis</span></div>
+      <div class="tbl-wrap"><table class="rep"><thead><tr><th>Instituição</th><th class="n">Contratos</th>
+      <th class="n">Retorno médio do CIEE</th><th class="n">Assinatura média</th><th class="n">Pior assinatura</th>
+      </tr></thead><tbody>`;
+    inst.forEach(([nome, o]) => {
+      h += `<tr><td>${esc(nome)}</td><td class="n">${o.n}</td>
+        <td class="n">${d1(avg(o.retornos))}</td>
+        <td class="n">${d1(avg(o.assin))}</td>
+        <td class="n">${o.assin.length ? Math.max(...o.assin) : '—'}</td></tr>`;
+    });
+    h += `</tbody></table></div><div class="note">Ordenado pela assinatura média, da mais lenta para a mais rápida.
+      Instituições sem contrato assinado ainda aparecem sem média.</div></div>`;
+  }
+  document.getElementById('p-contratos').innerHTML = h;
+}
+
+
+/* Folha de uniformes: a mesma informação em texto puro, sem campo de edição,
+   sem nada cortado. É o que ela fotografa ou manda para o fornecedor. */
+function renderFolhaUniformes(linhas){
+  const hoje = HOJE.toLocaleDateString('pt-BR');
+  const col = [
+    ['Empresa', u => u.empresa], ['Colaborador', u => u.nome],
+    ['Vaga', u => u.vaga], ['Admissão', u => fmtD(u.admissao)],
+    ['Função', u => u.cargo], ['Setor', u => u.setor],
+    ['Nasc.', u => fmtD(u.nascimento)], ['Telefone', u => u.telefone],
+    ['CPF', u => u.cpf], ['Terceiro', u => u.terceiro],
+    ['Calç.', u => u.sapato], ['Camisa', u => u.camisa],
+    ['Calça', u => u.calca], ['Entrega', u => u.entregue],
+  ];
+  let h = `<div class="toolbar folha-barra">
+    <button class="sm" id="u-folha-sair">← Voltar para a edição</button>
+    <span class="count">${linhas.length} colaborador(es)</span></div>
+  <div class="folha">
+    <div class="folha-cab">
+      <div><span class="eyebrow">Recrutamento &amp; Seleção · Grupo Fagron</span>
+        <h2>Uniformes</h2></div>
+      <div class="folha-data">${linhas.length} colaborador(es)<br>emitido em ${hoje}</div>
+    </div>
+    <table class="folha-tab"><thead><tr>${col.map(([t]) => `<th>${t}</th>`).join('')}</tr></thead><tbody>`;
+  if (!linhas.length) h += `<tr><td colspan="${col.length}" class="vazio">Nenhum registro com esses filtros.</td></tr>`;
+  linhas.forEach(({u}) => {
+    h += `<tr>${col.map(([, f]) => {
+      const v = f(u);
+      return `<td>${v === null || v === undefined || v === '' ? '<span class="falta">—</span>' : esc(String(v))}</td>`;
+    }).join('')}</tr>`;
+  });
+  h += `</tbody></table></div>`;
+  document.getElementById('p-uniformes').innerHTML = h;
+}
+
+function renderUniformes(){
+  const L = S.listas;
+  const TAM = L.tamanhos || ['PP','P','M','G','GG','XG'];
+  const empresas = S.params.empresasUniforme || [];
+  const linhas = S.uniformes.map((u,i) => ({u,i})).filter(({u}) => {
+    if (!passaEmpresa('uniformes', u.empresa)) return false;
+    if (ui.uDe && (!u.admissao || u.admissao < ui.uDe)) return false;
+    if (ui.uAte && (!u.admissao || u.admissao > ui.uAte)) return false;
+    if (ui.uBusca && !((u.nome||'')+' '+(u.empresa||'')+' '+(u.cargo||'')+' '+(u.cpf||''))
+        .toLowerCase().includes(ui.uBusca.toLowerCase())) return false;
+    return true;
+  }).sort((a,b) => (b.u.admissao||'').localeCompare(a.u.admissao||'') ||
+                   (a.u.nome||'').localeCompare(b.u.nome||'', 'pt-BR'));
+  const linhasOrd = aplicarOrdem('uniformes', linhas, {
+    empresa:(r)=>r.u.empresa, nome:(r)=>r.u.nome, vaga:(r)=>r.u.vaga,
+    nascimento:(r)=>r.u.nascimento, telefone:(r)=>r.u.telefone, cpf:(r)=>r.u.cpf,
+    admissao:(r)=>r.u.admissao, cargo:(r)=>r.u.cargo, setor:(r)=>r.u.setor,
+    terceiro:(r)=>r.u.terceiro, sapato:(r)=>r.u.sapato, camisa:(r)=>r.u.camisa, calca:(r)=>r.u.calca,
+  });
+  if (ui.uFolha){ renderFolhaUniformes(linhasOrd); return; }
+  const auto = S.uniformes.filter(u => u.idVaga).length;
+  const comData = ui.uDe || ui.uAte;
+  const faltando = linhasOrd.filter(({u}) => !u.camisa || !u.calca || !u.sapato).length;
+
+  let h = `<div class="toolbar">
+    ${selEmpresa('uniformes','uniformes','empresa')}
+    <span class="perioddo"><label>Admissão de</label>
+      <input type="date" data-uni-de value="${esc(ui.uDe||'')}">
+      <label>até</label>
+      <input type="date" data-uni-ate value="${esc(ui.uAte||'')}">
+      ${comData ? `<button class="sm ghost" data-uni-limpa title="Limpar o período">✕</button>` : ''}</span>
+    <input type="search" id="u-busca" placeholder="Buscar colaborador, cargo ou CPF…" value="${esc(ui.uBusca)}">
+    <button class="sm" id="u-lancar" title="Traz da Admissão todo mundo que ainda não está aqui">Lançar uniformes</button>
+    <button class="sm" id="u-add">+ Novo colaborador</button>
+    <button class="sm" id="u-folha" title="Mostra tudo em texto, sem cortar nada, para tirar o print">Ver para imprimir</button>
+    ${btnOrdemPadrao('uniformes')}
+    <span class="count">${linhasOrd.length} de ${S.uniformes.length}</span></div>`;
+
+  h += `<div class="banner">O colaborador entra aqui <b>sozinho</b> ao fechar a vaga, com empresa, nome,
+    tipo de vaga, data de admissão, função e setor já
+    preenchidos${auto ? `; <b>${auto}</b> ${auto>1?'vieram':'veio'} assim` : ''}. Só de
+    <b>${empresas.map(esc).join('</b> e <b>') || 'nenhuma empresa configurada'}</b>; as demais não entram.
+    Nascimento, telefone, CPF, calçado e tamanhos são preenchidos por você.
+    Data de admissão, nome, empresa, função e setor <b>vêm da vaga</b>: corrigiu lá, corrige aqui sozinho.
+    ${faltando ? `<br><b>${faltando}</b> ${faltando>1?'registros estão':'registro está'} sem algum tamanho.` : ''}</div>`;
+
+  /* Esta aba é feita para ser fotografada inteira: nada de rolagem lateral.
+     A tabela é proporcional, os títulos quebram em duas linhas e os campos
+     encolhem junto. Cada célula guarda o valor completo no title. */
+  /* Tabela de largura fixa: quem manda na largura das colunas é o <colgroup>.
+     A primeira linha do cabeçalho tem células agrupadas (colspan), e com elas
+     o navegador ignora a largura posta em cada <th> e reparte tudo por igual —
+     era por isso que Função e Setor ficavam apertadas. */
+  h += `<div class="grid-wrap sem-rolagem"><table class="grid uni cabe">
+    <colgroup>${['8.5%','11%','6.5%','6.5%','15%','11%','6%','7%','6.5%','6.5%','3.5%','3%','3%','4.5%','1.5%']
+      .map(w => `<col style="width:${w}">`).join('')}</colgroup><thead>
+    <tr><th class="grp a stG" colspan="2">Identificação</th>
+        <th class="grp c" colspan="6">Vem da admissão</th>
+        <th class="grp b" colspan="4">Preencher</th>
+        <th class="grp d" colspan="2">Entrega</th></tr>
+    <tr>${thOrd('uniformes','empresa','Empresa','','width:9%')}
+        ${thOrd('uniformes','nome','Colaborador','','width:14%')}
+        ${thOrd('uniformes','vaga','Vaga','','width:6.5%')}
+        ${thOrd('uniformes','admissao','Admissão','','width:7%')}
+        ${thOrd('uniformes','cargo','Função','','width:15%')}
+        ${thOrd('uniformes','setor','Setor','','width:11%')}
+        ${thOrd('uniformes','nascimento','Nascimento','','width:7%')}
+        ${thOrd('uniformes','telefone','Telefone','','width:7.5%')}
+        ${thOrd('uniformes','cpf','CPF','','width:7%')}
+        ${thOrd('uniformes','terceiro','Terceiro','','width:6.5%')}
+        ${thOrd('uniformes','sapato','Calçado','n','width:4.5%')}
+        ${thOrd('uniformes','camisa','Camisa','','width:4.5%')}
+        ${thOrd('uniformes','calca','Calça','','width:4.5%')}
+        <th style="width:4.5%">Entregue</th>
+        <th style="width:2%"></th></tr></thead><tbody>`;
+
+  if (!linhasOrd.length) h += `<tr><td colspan="15"><div class="empty">Nenhum registro com esses filtros.</div></td></tr>`;
+  linhasOrd.forEach(({u,i}) => {
+    h += `<tr${autoriaAttr(u)}><td>${cBaseQ(i,'empresa',u.empresa,'empresas')}</td>
+      <td>${cWrap(i,'nome',u.nome)}</td>
+      <td>${cSelQ(i,'vaga',u.vaga,['Nova posição','Reposição'])}</td>
+      <td${u.idVaga ? ' data-vinc="1" title="Vem da aba Vagas — corrija lá e muda em todo lugar"' : ''}>${cDate(i,'admissao',u.admissao)}</td>
+      <td>${cBaseQ(i,'cargo',u.cargo,'cargos')}</td>
+      <td>${cBaseQ(i,'setor',u.setor,'departamentos')}</td>
+      <td>${cDate(i,'nascimento',u.nascimento)}</td>
+      <td>${cWrap(i,'telefone',u.telefone)}</td>
+      <td>${cWrap(i,'cpf',u.cpf)}</td>
+      <td>${cBaseQ(i,'terceiro',u.terceiro,'terceiros')}</td>
+      <td>${cTxt(i,'sapato',u.sapato)}</td>
+      <td>${cSelQ(i,'camisa',u.camisa,TAM,'—',true)}</td>
+      <td>${cSelQ(i,'calca',u.calca,TAM,'—',true)}</td>
+      <td>${cSelQ(i,'entregue',u.entregue,['SIM','NÃO'])}</td>
+      <td class="calc"><button class="rowbtn" data-del="uniformes" data-i="${i}">✕</button></td></tr>`;
+  });
+  h += `</tbody></table></div>`;
+  document.getElementById('p-uniformes').innerHTML = h;
+}
+
+/* ============================================================ ADMISSÃO → EXPERIÊNCIA */
+/* Quando o checklist de uma admissão chega a 100%, o colaborador passa a existir
+   no controle de experiência, já com empresa, gestor, cargo e data de admissão.
+   Só cria uma vez por vaga: depois disso a linha é sua, ninguém sobrescreve. */
+function sincronizarExperiencia(alvo){
+  const criados = [];
+  (alvo ? [alvo] : S.admissao).forEach(a => {
+    if (!a.idVaga) return;
+    const c = calcAdm(a);
+    if (c.pct < 1) return;
+    if (S.experiencia.some(e => e.idVaga === a.idVaga)) return;
+    const v = vagaPorId(a.idVaga);
+    S.experiencia.unshift({
+      id: proxId('experiencia','E'),
+      idVaga: a.idVaga,
+      nome: c.pessoa || '',
+      empresa: c.empresa || '',
+      cargo: c.cargo || '',
+      depto: v ? v.depto : '',
+      gestor: c.gestor || '',
+      admissao: c.inicio || null,
+      env1: null, prorrog: '', env2: null, efetiv: '',
+      obs: 'Veio da admissão ' + a.idVaga,
+    });
+    criados.push(c.pessoa || a.idVaga);
+  });
+  return criados;
+}
+
+/* Índice da tarefa "lançar na planilha integração" no checklist, achado pelo nome
+   para sobreviver a renomeações e reordenações feitas na aba Base. */
+function idxTarefaIntegracao(){
+  return S.listas.checklist.findIndex(t => /INTEGRA/i.test(t));
+}
+/* A integração é um controle de uma empresa só (Fagron Services por padrão,
+   ajustável em Parâmetros). Admissão de outra empresa não entra aqui. */
+/* Vaga fechada é vaga que virou contratação: a admissão nasce aqui, com tudo
+   que já está na vaga — empresa, cargo, gestor, substituição, quem entra e a
+   data de início. Não existe "criar admissão na mão". */
+/* campos da vaga que mandam nas outras abas */
+const ESPELHADOS = ['inicio','aprovado','empresa','cargo','depto','gestor','tipo'];
+const VAGA_FECHADA = st => !!st && (/FECHAD|CONCLU|ADMITID|CONTRATAD/i.test(st)
+  || COR_STATUS_VAGA[st] === 's-good');
+/* Vaga aprovada é vaga que virou contratação. Preencheu a data da última etapa
+   (Aprovação) — ou fechou a vaga pelo status — e a admissão nasce sozinha. */
+function vagaAprovada(v){
+  if (!v) return false;
+  const n = (S.params.etapas || []).length;
+  return !!(n && Array.isArray(v.etapas) && v.etapas[n - 1]) || VAGA_FECHADA(v.status);
+}
+function sincronizarAdmissao(vaga){
+  const alvos = vaga ? [vaga] : S.vagas;
+  const criados = [];
+  alvos.forEach(v => {
+    if (!vagaAprovada(v)) return;
+    if (S.admissao.some(a => a.idVaga === v.id)) return;
+    S.admissao.unshift({
+      id: proxId('admissao','A'), idVaga: v.id,
+      itens: S.listas.checklist.map(() => 'NÃO'),
+      obs: 'Aberta automaticamente na aprovação da vaga ' + v.id,
+    });
+    criados.push(v.aprovado || v.cargo || v.id);
+  });
+  return criados;
+}
+
+/* Um único gatilho: mexeu na vaga, o sistema reavalia tudo que depende dela.
+   Fecha a vaga → nasce a admissão → e dali saem integração, contrato de estágio
+   e uniforme, cada um com sua regra. Ela não precisa lançar nada à mão. */
+function propagarVaga(v){
+  if (!v) return [];
+  const novos = sincronizarAdmissao(v);
+  const a = S.admissao.find(x => x.idVaga === v.id);
+  if (a) sincronizarIntegracao(a), sincronizarContratos(a), sincronizarUniformes(a);
+  espelharDaVaga(v);
+  return novos;
+}
+
+/* A vaga manda. Data de início, empresa, cargo, gestor, setor e quem entra
+   moram na aba Vagas; as outras abas são espelho. Corrigiu a data lá, ela
+   corrige sozinha na admissão, na experiência, na integração e no uniforme —
+   sem você abrir cada aba. Registro criado à mão, sem vaga de origem, fica
+   intocado: ali quem manda é você. */
+function espelharDaVaga(v){
+  if (!v || !v.id) return 0;
+  let n = 0;
+  const por = (o, campo, valor) => {
+    const novo = valor === undefined ? '' : valor;
+    if ((o[campo] || '') === (novo || '')) return;
+    o[campo] = novo; n++;
+  };
+  S.experiencia.filter(x => x.idVaga === v.id).forEach(e => {
+    por(e, 'admissao', v.inicio || null);
+    por(e, 'nome', v.aprovado); por(e, 'empresa', v.empresa);
+    por(e, 'cargo', v.cargo);   por(e, 'depto', v.depto);
+    por(e, 'gestor', v.gestor);
+  });
+  S.integracao.filter(x => x.idVaga === v.id).forEach(g => {
+    por(g, 'admissao', v.inicio || null);
+    por(g, 'nome', v.aprovado); por(g, 'empresa', v.empresa);
+    por(g, 'setor', v.depto);   por(g, 'gestor', v.gestor);
+  });
+  S.uniformes.filter(x => x.idVaga === v.id).forEach(u => {
+    por(u, 'admissao', v.inicio || null);
+    por(u, 'nome', v.aprovado); por(u, 'empresa', v.empresa);
+    por(u, 'cargo', v.cargo);   por(u, 'setor', v.depto);
+    por(u, 'vaga', v.tipo === 'Substituição' ? 'Reposição' : (v.tipo ? 'Nova posição' : ''));
+  });
+  /* no contrato a data que importa é a da solicitação, que é dele; só nome e empresa espelham */
+  S.contratos.filter(x => x.idVaga === v.id).forEach(k => {
+    por(k, 'nome', v.aprovado); por(k, 'empresa', v.empresa);
+  });
+  if (n) marcarSujo();
+  return n;
+}
+
+function sincronizarIntegracao(reg){
+  const alvo = (S.params.empresaIntegracao || '').trim();
+  const criados = [];
+  (reg ? [reg] : S.admissao).forEach(a => {
+    if (!a.idVaga) return;
+    const c = calcAdm(a);
+    if (alvo && !mesmaEmpresa(c.empresa, alvo)) return;
+    if (!c.pessoa) return;              /* sem saber quem entra, o registro não serve */
+    if (S.integracao.some(g => g.idVaga === a.idVaga)) return;
+    const v = vagaPorId(a.idVaga);
+    S.integracao.unshift({
+      id: proxId('integracao','I'),
+      idVaga: a.idVaga,
+      admissao: c.inicio || null,
+      nome: c.pessoa || '',
+      empresa: c.empresa || '',
+      setor: v ? v.depto : '',
+      gestor: c.gestor || '',
+      feito: 'NÃO',
+      dataIntegr: null,
+      obs: 'Veio da admissão ' + a.idVaga,
+    });
+    criados.push(c.pessoa || a.idVaga);
+  });
+  return criados;
+}
+
+/* Contrato de estágio: a tarefa "contrato estágio solicitado" do checklist
+   abre a linha aqui, para qualquer empresa. */
+/* Contrato do CIEE existe para estagiário. Vale para todas as empresas,
+   mas só entra aqui quem tem cargo de estágio — era isso que estava trazendo
+   gente que não é estagiária. */
+const EH_ESTAGIO = cargo => /ESTAGI/i.test(cargo || '');
+/* A Base ficou em caixa alta e os parâmetros guardavam a grafia antiga
+   ("Fagron Services" vs "FAGRON SERVICES"), então nenhuma regra de empresa
+   casava. Comparar sem caixa e sem acento resolve de vez. */
+const mesmaEmpresa = (a, b) => normal(a) === normal(b);
+function sincronizarContratos(reg){
+  const criados = [];
+  (reg ? [reg] : S.admissao).forEach(a => {
+    if (!a.idVaga) return;
+    const c = calcAdm(a);
+    if (!EH_ESTAGIO(c.cargo)) return;
+    if (!c.pessoa) return;
+    if (S.contratos.some(x => x.idVaga === a.idVaga)) return;
+    S.contratos.unshift({
+      id: proxId('contratos','K'), idVaga: a.idVaga,
+      nome: c.pessoa || '', empresa: c.empresa || '', faculdade: '',
+      solic: iso(HOJE), retorno: null, assinado: null,
+      obs: 'Veio da admissão ' + a.idVaga,
+    });
+    criados.push(c.pessoa || a.idVaga);
+  });
+  return criados;
+}
+
+/* Uniforme: a tarefa "uniforme" do checklist abre a linha, só para as
+   empresas que fornecem uniforme (Fagron Services e Distribution por padrão). */
+function sincronizarUniformes(reg){
+  const permitidas = S.params.empresasUniforme || [];
+  const criados = [];
+  (reg ? [reg] : S.admissao).forEach(a => {
+    if (!a.idVaga) return;
+    const c = calcAdm(a);
+    if (permitidas.length && !permitidas.some(e => mesmaEmpresa(e, c.empresa))) return;
+    if (!c.pessoa) return;
+    if (S.uniformes.some(u => u.idVaga === a.idVaga)) return;
+    const v = vagaPorId(a.idVaga);
+    S.uniformes.unshift({
+      id: proxId('uniformes','U'), idVaga: a.idVaga,
+      empresa: c.empresa || '', nome: c.pessoa || '',
+      vaga: (v && v.tipo === 'Substituição') ? 'Reposição' : (v && v.tipo ? 'Nova posição' : ''),
+      nascimento: null, telefone: '', cpf: '',
+      admissao: c.inicio || null, cargo: c.cargo || '', setor: v ? v.depto : '',
+      terceiro: 'NA', sapato: '', camisa: '', calca: '',
+      entregue: '', dataEntrega: null, obs: 'Veio da admissão ' + a.idVaga,
+    });
+    criados.push(c.pessoa || a.idVaga);
+  });
+  return criados;
+}
+
+/* Cadastro rápido de um item da Base sem sair da tabela. */
+let aposCadastro = null;
+function cadastrarNaBase(lista, feito){
+  aposCadastro = {lista, feito};
+  const meta = META(lista);
+  const el = document.getElementById('modal');
+  el.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true">
+    <h3>Cadastrar em ${esc(meta ? meta.t : lista)}</h3>
+    <p>O valor entra na Base e passa a valer para todas as abas. Ele fica em caixa alta,
+       como o resto do sistema.</p>
+    <div style="padding:0 20px 4px"><input id="nb-valor" style="width:100%" autocomplete="off"></div>
+    <div class="modal-acts"><button data-conf="0">Cancelar</button>
+      <button class="danger" id="nb-ok">Cadastrar</button></div></div>`;
+  el.hidden = false;
+  const c = document.getElementById('nb-valor');
+  c.focus();
+  c.addEventListener('keydown', ev => { if (ev.key === 'Enter'){ ev.preventDefault(); confirmarCadastro(); } });
+}
+function confirmarCadastro(){
+  if (!aposCadastro) return;
+  const v = caixaAlta((document.getElementById('nb-valor').value || '').trim());
+  if (!v){ document.getElementById('nb-valor').focus(); return; }
+  const {lista, feito} = aposCadastro;
+  aposCadastro = null;
+  if (!Array.isArray(S.listas[lista])) S.listas[lista] = [];
+  if (!S.listas[lista].includes(v)) S.listas[lista].push(v);
+  fecharModal(0);
+  feito(v);
+  toast('"' + v + '" cadastrado na Base');
+}
+
+/* ============================================================ BASE DE DADOS */
+const LISTAS_META = [
+  {k:'empresas',      t:'Empresas',            usos:[['vagas','empresa'],['candidatos','empresa'],['experiencia','empresa'],['integracao','empresa'],['contratos','empresa'],['uniformes','empresa']]},
+  {k:'cargos',        t:'Cargos',              usos:[['vagas','cargo'],['candidatos','cargo'],['experiencia','cargo'],['uniformes','cargo']]},
+  {k:'gestores',      t:'Gestores',             usos:[['vagas','gestor'],['experiencia','gestor'],['integracao','gestor']]},
+  {k:'departamentos', t:'Departamentos',       usos:[['vagas','depto'],['experiencia','depto'],['integracao','setor'],['uniformes','setor']]},
+  {k:'statusVaga',    t:'Status da vaga',      usos:[['vagas','status']]},
+  {k:'tipoVaga',      t:'Tipo de vaga',        usos:[['vagas','tipo']]},
+  {k:'statusCand',    t:'Status do candidato', usos:[['candidatos','status']]},
+  {k:'fontes',        t:'Fonte do candidato',  usos:[['candidatos','fonte']]},
+  {k:'motivos',       t:'Motivo de perda',     usos:[['candidatos','motivo']]},
+  {k:'instituicoes',  t:'Instituições de ensino', usos:[['contratos','faculdade']]},
+  {k:'terceiros',     t:'Empresas terceirizadas / temporárias', usos:[['uniformes','terceiro']], ordenada:true},
+  {k:'tamanhos',      t:'Tamanhos de uniforme', usos:[['uniformes','camisa'],['uniformes','calca']], ordenada:true},
+  {k:'feriados',      t:'Feriados', usos:[], ordenada:true},
+  {k:'checklist',     t:'Checklist de admissão', usos:[], ordenada:true},
+];
+const META = k => LISTAS_META.find(m => m.k === k);
+
+function contarUso(meta, valor){
+  let n = 0;
+  meta.usos.forEach(([col, campo]) => (S[col]||[]).forEach(r => { if (r[campo] === valor) n++; }));
+  return n;
+}
+function renomearValor(meta, antigo, novo){
+  meta.usos.forEach(([col, campo]) => (S[col]||[]).forEach(r => { if (r[campo] === antigo) r[campo] = novo; }));
+}
+function orfaos(meta){
+  const set = new Set(S.listas[meta.k]);
+  const fora = new Map();
+  meta.usos.forEach(([col, campo]) => (S[col]||[]).forEach(r => {
+    const v = r[campo];
+    if (v && !set.has(v)) fora.set(v, (fora.get(v)||0) + 1);
+  }));
+  return [...fora.entries()].sort((a,b) => b[1]-a[1]);
+}
+
+function renderBase(){
+  let h = `<div class="banner"><b>Esta é a base do sistema.</b> Todo menu suspenso das outras abas lê daqui.
+    Renomear um item corrige junto todos os registros que o usavam — é assim que você padroniza grafias.
+    Nas colunas de cargo, empresa e departamento você também pode digitar um valor novo direto na tabela;
+    ele aparece aqui como fora da lista, com um botão para incluir.</div>`;
+  h += `<div class="params">`;
+  LISTAS_META.forEach(meta => {
+    const lista = S.listas[meta.k] || [];
+    const fora = orfaos(meta);
+    h += `<div class="pbox"><h3>${meta.t} <span class="listcount">${lista.length}</span></h3>
+      <div class="listbox">`;
+    const temCor = !!COR_LISTA[meta.k];
+    lista.forEach((v, j) => {
+      const n = meta.usos.length ? contarUso(meta, v) : null;
+      const cor = temCor ? corStatus(meta.k, v) : null;
+      const escolhida = temCor ? (coresDe(meta.k)[v] || '') : '';
+      h += `<div class="lrow">
+        ${temCor ? `<select class="swsel stt ${cor}" data-cor="${meta.k}" data-val="${esc(v)}"
+            title="Cor deste status na grade">${PALETA.map(([c, nome]) =>
+            `<option value="${c}"${c === escolhida ? ' selected' : ''}>${esc(nome)}</option>`).join('')}</select>` : ''}
+        <input class="litem${cor?' comsw':''}" data-lista="${meta.k}" data-j="${j}" value="${esc(v)}">
+        <span class="luso" title="${n} registro(s) usam este valor">${n==null?'':n||''}</span>
+        ${meta.ordenada ? `<button class="rowbtn" data-mv="${meta.k}" data-j="${j}" data-dir="-1" title="Subir">↑</button>
+                           <button class="rowbtn" data-mv="${meta.k}" data-j="${j}" data-dir="1" title="Descer">↓</button>` : ''}
+        <button class="rowbtn" data-lrm="${meta.k}" data-j="${j}" title="Remover">✕</button></div>`;
+    });
+    h += `</div>
+      <div class="ladd"><input placeholder="Adicionar ${meta.t.toLowerCase()}…" data-ladd="${meta.k}">
+        <button class="sm" data-laddbtn="${meta.k}">Adicionar</button></div>`;
+    if (fora.length){
+      h += `<div class="hint"><b>Fora da lista, mas em uso:</b><div class="orfaos">` +
+        fora.map(([v, n]) => `<button class="orfao" data-lfix="${meta.k}" data-val="${esc(v)}"
+          title="Incluir na lista">${esc(v)} <b>${n}</b> +</button>`).join('') + `</div></div>`;
+    }
+    h += `</div>`;
+  });
+  h += `</div>`;
+  document.getElementById('p-base').innerHTML = h;
+}
+
+/* ============================================================ ABAS */
+/* ============================================================ CALENDÁRIO
+   As outras abas registram o que já foi feito e medem o prazo depois. Esta
+   olha para a frente: pega o que ainda está pendente e diz em que dia aquilo
+   deveria estar pronto.
+
+   Duas contagens convivem de propósito:
+   — prazos de processo (etapas da vaga, contrato CIEE) contam DIAS ÚTEIS, para
+     o sistema não cobrar nada num domingo;
+   — prazos legais (45 e 90 dias de experiência) contam DIAS CORRIDOS, porque
+     é assim que a lei conta.
+   O indicador de SLA do Painel continua como sempre foi, em dias corridos:
+   mexer nele mudaria o histórico já medido. */
+
+const CAL_TIPOS = [
+  ['vaga',        'Etapas de vaga'],
+  ['experiencia', 'Experiência'],
+  ['contrato',    'Contratos CIEE'],
+  ['integracao',  'Integração'],
+  ['uniforme',    'Uniformes'],
+  ['nota',        'Anotações'],
+];
+
+function fimDaSemana(){
+  const d = new Date(HOJE);
+  d.setDate(d.getDate() + (7 - (d.getDay() || 7)));   /* domingo desta semana */
+  return iso(d);
+}
+function baldeDe(data){
+  const hoje = iso(HOJE);
+  if (data < hoje) return 'atrasado';
+  if (data === hoje) return 'hoje';
+  if (data === addD(hoje, 1)) return 'amanha';
+  if (data <= fimDaSemana()) return 'semana';
+  if (data <= addD(hoje, 15)) return 'quinze';
+  return 'depois';
+}
+const CAL_BALDES = [
+  ['atrasado', 'Atrasado',            'crit'],
+  ['hoje',     'Hoje',                'warn'],
+  ['amanha',   'Amanhã',              'warn'],
+  ['semana',   'Ainda esta semana',   'neut'],
+  ['quinze',   'Próximos 15 dias',    'neut'],
+  ['depois',   'Mais para a frente',  'neut'],
+];
+
+/* Tudo que está pendente, com a data em que deveria acontecer. */
+function compromissos(){
+  const P = S.params, hoje = iso(HOJE), fora = [];
+  const pôr = o => {
+    if (!o.data) return;
+    o.bucket = baldeDe(o.data);
+    o.faltam = o.corridos ? difD(hoje, o.data) : diasUteisEntre(hoje, o.data);
+    fora.push(o);
+  };
+
+  /* vagas em aberto: a PRÓXIMA etapa não cumprida. Mostrar as dez de cada vaga
+     encheria a tela de coisa que ainda não é da vez. */
+  (S.vagas || []).forEach(v => {
+    if (!ABERTO(v.status) || !v.abertura) return;
+    let k = -1;
+    for (let i = 0; i < P.etapas.length; i++) if (!v.etapas[i]){ k = i; break; }
+    if (k < 0) return;
+    pôr({ tipo:'vaga', data: somarDiasUteis(v.abertura, P.etapas[k].sla), aba:'vagas',
+          titulo: P.etapas[k].nome,
+          quem: [v.cargo, v.empresa].filter(Boolean).join(' · ') || v.id,
+          marca: v.id, nota: 'etapa ' + (k+1) + ' de ' + P.etapas.length,
+          modo:'data', rotuloAcao:'Data em que esta etapa foi concluída',
+          alvo:{col:'vagas', id:v.id, campo:'etapas', idx:k} });
+  });
+
+  /* aprovada e sem data de admissão: enquanto ela não vier, a integração, o
+     período de experiência e o uniforme dessa pessoa não têm prazo nenhum */
+  (S.vagas || []).forEach(v => {
+    const nE = P.etapas.length;
+    if (!nE || !Array.isArray(v.etapas) || !v.etapas[nE - 1] || v.inicio) return;
+    pôr({ tipo:'vaga', data: v.etapas[nE - 1], aba:'vagas',
+          titulo:'Informar a data de admissão',
+          quem: [v.aprovado || v.cargo, v.empresa].filter(Boolean).join(' · ') || v.id,
+          marca: v.id, nota:'sem ela a integração e o uniforme ficam sem prazo',
+          modo:'data', rotuloAcao:'Data de admissão',
+          alvo:{col:'vagas', id:v.id, campo:'inicio'} });
+  });
+
+  /* período de experiência: prazo legal, em dias corridos */
+  (S.experiencia || []).forEach(e => {
+    if (!e.admissao) return;
+    const c = calcExp(e);
+    if (!e.prorrog) pôr({ tipo:'experiencia', data:c.lim1, aba:'experiencia', corridos:true,
+      titulo:'Decidir prorrogação — ' + P.expP1 + ' dias', quem:e.nome || '(sem nome)',
+      marca:e.empresa || '', nota:'dias corridos',
+      modo:'simnao', pergunta:'Prorrogar o período de experiência desta pessoa?',
+      alvo:{col:'experiencia', id:e.id, campo:'prorrog'} });
+    if (!e.efetiv && !c.semSegundo) pôr({ tipo:'experiencia', data:c.lim2, aba:'experiencia', corridos:true,
+      titulo:'Decidir efetivação — ' + P.expP2 + ' dias', quem:e.nome || '(sem nome)',
+      marca:e.empresa || '', nota:'dias corridos',
+      modo:'simnao', pergunta:'Efetivar esta pessoa?',
+      alvo:{col:'experiencia', id:e.id, campo:'efetiv'} });
+  });
+
+  /* contrato de estágio: devolução dentro do SLA do CIEE */
+  (S.contratos || []).forEach(k => {
+    if (!k.solic || k.retorno) return;
+    pôr({ tipo:'contrato', data: calcContrato(k).limite, aba:'contratos',
+      titulo:'Retorno do contrato assinado', quem:k.nome || '(sem nome)',
+      marca:k.faculdade || '', nota:'CIEE',
+      modo:'data', rotuloAcao:'Data em que o contrato voltou',
+      alvo:{col:'contratos', id:k.id, campo:'retorno'} });
+  });
+
+  /* integração e uniforme: têm a admissão como data-alvo */
+  (S.integracao || []).forEach(g => {
+    if (g.feito === 'SIM' || !g.admissao) return;
+    pôr({ tipo:'integracao', data:g.admissao, aba:'integracao',
+      titulo:'Integração pendente', quem:g.nome || '(sem nome)', marca:g.empresa || '',
+      modo:'data', rotuloAcao:'Data em que a integração foi feita',
+      alvo:{col:'integracao', id:g.id, campo:'dataIntegr', junto:['feito','SIM']} });
+  });
+  (S.uniformes || []).forEach(u => {
+    if (u.entregue === 'SIM' || !u.admissao) return;
+    pôr({ tipo:'uniforme', data:u.admissao, aba:'uniformes',
+      titulo:'Entregar uniforme até a admissão', quem:u.nome || '(sem nome)', marca:u.empresa || '',
+      modo:'data', rotuloAcao:'Data da entrega',
+      alvo:{col:'uniformes', id:u.id, campo:'dataEntrega', junto:['entregue','SIM']} });
+  });
+
+  /* anotações rápidas com data de lembrete */
+  (S.notas || []).forEach(n => {
+    if (n.feito || !n.quando) return;
+    pôr({ tipo:'nota', data:n.quando, aba:'vagas',
+      titulo:n.texto || '(anotação sem texto)', quem:'', marca:n.idVaga || '',
+      modo:'feito', alvo:{col:'notas', id:n.id} });
+  });
+
+  return fora.sort((a, b) => a.data < b.data ? -1 : a.data > b.data ? 1 : 0);
+}
+
+function calFiltrados(){
+  const desligados = ui.calFora || [];
+  return compromissos().filter(c => !desligados.includes(c.tipo));
+}
+const CAL_ROTULO = Object.fromEntries(CAL_TIPOS);
+function calPrazo(c){
+  const u = c.corridos ? 'd' : 'd úteis';
+  if (c.faltam < 0) return 'atrasado há ' + (-c.faltam) + u;
+  if (c.faltam === 0) return 'vence hoje';
+  return 'faltam ' + c.faltam + u;
+}
+function calLinha(c, i){
+  const fk = c.bucket === 'atrasado' ? 'crit' : (c.bucket === 'hoje' || c.bucket === 'amanha') ? 'warn' : 'neut';
+  /* O quadradinho é o caminho de um clique: marca como feito HOJE e grava a
+     data no registro. Quem fez noutro dia clica no resto da linha e escolhe a
+     data. Decisão de sim/não não tem "feito hoje" — o quadradinho abre a
+     pergunta, porque adivinhar a resposta seria pior que perguntar. */
+  const marcaHoje = c.modo !== 'simnao';
+  return `<div class="calrow">
+    <button class="calchk${marcaHoje ? '' : ' pergunta'}" data-calok="${i}"
+      title="${marcaHoje ? 'Marcar como feito hoje, ' + fmtD(iso(HOJE)) : 'Precisa de uma resposta: clique para escolher'}"
+      aria-label="${marcaHoje ? 'Concluir com a data de hoje' : 'Responder'}">${marcaHoje ? '✓' : '?'}</button>
+    <button class="calconteudo" data-cal="${i}" title="Abrir para escolher outra data">
+      <span class="caldata">${fmtD(c.data)}</span>
+      <span class="caltipo t-${c.tipo}">${esc(CAL_ROTULO[c.tipo])}</span>
+      <span class="caltit">${esc(c.titulo)}${c.quem ? ` <span class="calquem">· ${esc(c.quem)}</span>` : ''}</span>
+      <span class="calmarca">${esc(c.marca || '')}</span>
+      <span class="pill ${fk}">${esc(calPrazo(c))}</span></button>
+  </div>`;
+}
+
+let CAL_ITENS = [];
+/* Resolver o compromisso sem sair da lista: a pessoa clica, põe a data (ou
+   responde sim/não) e aquilo sai do radar na hora. Ir até a aba continua
+   disponível, para quando ela precisa do registro inteiro. */
+function telaCompromisso(i){
+  const c = CAL_ITENS[i];
+  if (!c) return;
+  const el = document.getElementById('modal');
+  el.innerHTML = `<div class="modal-box cvbox" role="dialog" aria-modal="true">
+    <h3>${esc(c.titulo)}</h3>
+    <div class="cvcorpo">
+      <div class="hint"><b>${esc(CAL_ROTULO[c.tipo])}</b>${c.quem ? ' · ' + esc(c.quem) : ''}${c.marca ? ' · ' + esc(c.marca) : ''}<br>
+        Previsto para <b>${fmtD(c.data)}</b> — ${esc(calPrazo(c))}${c.nota ? ' · ' + esc(c.nota) : ''}</div>
+      ${c.modo === 'data' ? `<label class="cvlab">${esc(c.rotuloAcao || 'Data em que foi feito')}</label>
+        <input type="date" id="cp-data" value="${esc(iso(HOJE))}">
+        <div class="hint">Ao confirmar, a data entra no registro e este item sai do calendário.</div>` : ''}
+      ${c.modo === 'simnao' ? `<div class="hint" style="margin-top:12px">${esc(c.pergunta || '')}
+        A resposta vai para a aba Experiência e tira este item do calendário.</div>` : ''}
+      ${c.modo === 'feito' ? `<div class="hint" style="margin-top:12px">Marcar esta anotação como resolvida.
+        Ela sai do calendário e some da lista de lembretes.</div>` : ''}
+    </div>
+    <div class="modal-acts">
+      <button data-conf="0">Fechar</button>
+      <button class="sm" data-calir="${esc(c.aba)}">Abrir a aba</button>
+      ${c.modo === 'simnao'
+        ? `<button class="sm" data-cpsn="${i}" data-v="NÃO">Não</button>
+           <button class="danger" data-cpsn="${i}" data-v="SIM">Sim</button>`
+        : `<button class="danger" data-cpok="${i}">${c.modo === 'feito' ? 'Marcar como resolvida' : 'Concluir'}</button>`}
+    </div></div>`;
+  el.hidden = false;
+  const d = document.getElementById('cp-data');
+  if (d) d.focus();
+}
+function resolverCompromisso(i, valor){
+  const c = CAL_ITENS[i];
+  if (!c || !c.alvo) return;
+  const r = (S[c.alvo.col] || []).find(x => x.id === c.alvo.id);
+  if (!r){ toast('Não achei mais esse registro — talvez alguém o tenha apagado.'); fecharModal(0); return; }
+  if (c.modo === 'feito') r.feito = true;
+  else if (c.modo === 'simnao') r[c.alvo.campo] = valor;
+  else {
+    if (c.alvo.campo === 'etapas'){ r.etapas[c.alvo.idx] = valor || null; }
+    else r[c.alvo.campo] = valor || null;
+    if (c.alvo.junto) r[c.alvo.junto[0]] = c.alvo.junto[1];
+  }
+  let extra = '';
+  if (c.alvo.col === 'vagas'){
+    const novos = propagarVaga(r);
+    if (novos.length) extra = ' — ' + novos[0] + ' entrou na Admissão e nos controles seguintes';
+  }
+  marcarSujo(); fecharModal(0); render();
+  const quando = (c.modo === 'data' && valor) ? ' em ' + fmtD(valor) : '';
+  toast('Resolvido: ' + c.titulo + (c.quem ? ' · ' + c.quem : '') + quando + extra);
+}
+
+function calGradeMes(itens){
+  const ref = ui.calMes ? parseD(ui.calMes + '-01') : new Date(HOJE.getFullYear(), HOJE.getMonth(), 1);
+  const ano = ref.getFullYear(), mes = ref.getMonth();
+  const primeiro = new Date(ano, mes, 1), ultimo = new Date(ano, mes + 1, 0);
+  const porDia = {};
+  itens.forEach(c => { (porDia[c.data] = porDia[c.data] || []).push(c); });
+  const nomeMes = primeiro.toLocaleDateString('pt-BR', {month:'long', year:'numeric'});
+  const inicio = new Date(primeiro); inicio.setDate(1 - ((primeiro.getDay() + 6) % 7));   /* segunda */
+  let h = `<div class="calnav">
+      <button class="sm" data-calmes="-1">← mês anterior</button>
+      <b>${esc(nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1))}</b>
+      <button class="sm" data-calmes="1">próximo mês →</button>
+      <button class="sm" data-calmes="0">Voltar para hoje</button>
+    </div>
+    <div class="calgrade">
+      ${['seg','ter','qua','qui','sex','sáb','dom'].map(d => `<div class="calcab">${d}</div>`).join('')}`;
+  const cursor = new Date(inicio);
+  while (cursor <= ultimo || (cursor.getDay() + 6) % 7 !== 0){
+    const dia = iso(cursor), doMes = cursor.getMonth() === mes;
+    const doDia = porDia[dia] || [];
+    const atrasado = doDia.some(c => c.bucket === 'atrasado');
+    h += `<div class="calcel${doMes ? '' : ' fora'}${dia === iso(HOJE) ? ' hoje' : ''}${atrasado ? ' temAtraso' : ''}">
+      <div class="caldia">${cursor.getDate()}</div>
+      ${doDia.slice(0, 4).map(c => `<button class="calchip t-${c.tipo}${c.bucket==='atrasado'?' atras':''}"
+          data-cal="${itens.indexOf(c)}" title="${esc(c.titulo + (c.quem ? ' · ' + c.quem : '') + ' — ' + calPrazo(c))}"
+        >${esc(c.quem || c.titulo)}</button>`).join('')}
+      ${doDia.length > 4 ? `<div class="calmais">+${doDia.length - 4}</div>` : ''}</div>`;
+    cursor.setDate(cursor.getDate() + 1);
+    if (cursor.getFullYear() > ano + 1) break;
+  }
+  return h + '</div>';
+}
+
+function renderCalendario(){
+  const todos = compromissos();
+  const itens = calFiltrados();
+  CAL_ITENS = itens;
+  const vista = ui.calVista || 'lista';
+  const conta = t => todos.filter(c => c.tipo === t).length;
+  const atrasados = itens.filter(c => c.bucket === 'atrasado').length;
+  const paraHoje = itens.filter(c => c.bucket === 'hoje').length;
+
+  let h = `<div class="toolbar">
+    <div class="chips">
+      <button class="chip-btn" data-calvista="lista" aria-pressed="${vista==='lista'}">Lista</button>
+      <button class="chip-btn" data-calvista="mes" aria-pressed="${vista==='mes'}">Mês</button>
+    </div>
+    <div class="chips calfiltros">${CAL_TIPOS.map(([k, nome]) =>
+      `<button class="chip-btn" data-caltipo="${k}" aria-pressed="${!(ui.calFora||[]).includes(k)}"
+        >${nome} <b>${conta(k)}</b></button>`).join('')}</div>
+  </div>
+  <div class="hint" style="margin-bottom:14px">Aqui está o que <b>ainda não foi feito</b>, na data em que
+    deveria estar pronto. Etapas de vaga e contrato CIEE contam <b>dias úteis</b> — fim de semana e os
+    feriados da Base ficam de fora. Os 45 e 90 dias de experiência contam <b>dias corridos</b>, porque
+    é assim que o prazo legal conta.<br>
+    <b>O quadradinho ✓ marca como feito hoje</b> (${fmtD(iso(HOJE))}) e grava essa data no registro.
+    Se você fez noutro dia, clique no resto da linha e escolha a data. Em qualquer um dos dois,
+    o item sai do radar.</div>`;
+
+  if (!itens.length){
+    h += `<div class="empty">Nada pendente com data. Assim que houver vaga aberta com data de abertura,
+      admissão lançada ou anotação com lembrete, os prazos aparecem aqui.</div>`;
+    document.getElementById('p-calendario').innerHTML = h;
+    return;
+  }
+
+  h += `<div class="calresumo">
+    <span class="pill ${atrasados ? 'crit' : 'good'}">${atrasados} atrasado(s)</span>
+    <span class="pill ${paraHoje ? 'warn' : 'neut'}">${paraHoje} para hoje</span>
+    <span class="opc">${itens.length} compromisso(s) no total</span></div>`;
+
+  if (vista === 'mes'){
+    h += calGradeMes(itens);
+  } else {
+    CAL_BALDES.forEach(([k, nome]) => {
+      const doBalde = itens.filter(c => c.bucket === k);
+      if (!doBalde.length) return;
+      h += `<div class="calgrupo"><h3 class="calh ${k}">${nome} <span class="listcount">${doBalde.length}</span></h3>
+        <div class="callista">${doBalde.map(c => calLinha(c, itens.indexOf(c))).join('')}</div></div>`;
+    });
+  }
+  document.getElementById('p-calendario').innerHTML = h;
+}
+
+const ABAS = [
+  {k:'painel', t:'Painel'}, {k:'calendario', t:'Calendário'}, {k:'vagas', t:'Vagas'},
+  {k:'admissao', t:'Admissão'}, {k:'experiencia', t:'Experiência'}, {k:'integracao', t:'Integração'},
+  {k:'contratos', t:'Contratos'}, {k:'uniformes', t:'Uniformes'},
+  {k:'base', t:'Base'}, {k:'parametros', t:'Parâmetros'},
+];
+const RENDER = {painel:renderPainel, calendario:renderCalendario, vagas:renderVagas,
+  admissao:renderAdmissao, experiencia:renderExperiencia, integracao:renderIntegracao,
+  contratos:renderContratos, uniformes:renderUniformes,
+  base:renderBase, parametros:renderParametros};
+
+function renderTabs(){
+  const abertas = S.vagas.filter(v => ABERTO(v.status)).length;
+  const atras = S.experiencia.filter(e => calcExp(e).atrasada).length;
+  const integrPend = S.integracao.filter(g => calcIntegr(g).pendente).length;
+  const admPend = S.admissao.filter(a => calcAdm(a).pct < 1).length;
+  document.getElementById('tabs').innerHTML = ABAS.map(a => {
+    let b = '';
+    if (a.k==='calendario'){
+      const n = compromissos().filter(c => c.bucket === 'atrasado').length;
+      if (n) b = `<span class="badge crit">${n}</span>`;
+    }
+    if (a.k==='vagas') b = `<span class="badge">${abertas}</span>`;
+    if (a.k==='admissao' && admPend) b = `<span class="badge">${admPend}</span>`;
+    if (a.k==='experiencia' && atras) b = `<span class="badge crit">${atras}</span>`;
+    if (a.k==='integracao' && integrPend) b = `<span class="badge crit">${integrPend}</span>`;
+    return `<button class="tab" role="tab" data-tab="${a.k}" aria-selected="${ui.tab===a.k}">${a.t}${b}</button>`;
+  }).join('');
+}
+function render(){
+  if (TRANCADO) return;
+  /* a equipe usa o sistema, mas não leva os dados embora */
+  const bc = document.getElementById('btn-csv');
+  if (bc) bc.hidden = !!COFRE && !ehAdmin();
+  const bp = document.getElementById('btn-pacote');
+  if (bp) bp.hidden = !soLocal;
+  const bk = document.getElementById('btn-backup');
+  if (bk) bk.hidden = soLocal || (!!COFRE && !ehAdmin());
+  const bs = document.getElementById('btn-sinc');
+  if (bs) bs.hidden = !sincLigada();
+  const av = document.getElementById('aviso-local');
+  if (av) av.hidden = !soLocal;
+  renderTabs();
+  renderDatalists();
+  ABAS.forEach(a => document.getElementById('p-'+a.k).hidden = (a.k !== ui.tab));
+  RENDER[ui.tab]();
+}
+
+/* ============================================================ MANTER O LUGAR */
+/* Editar uma célula redesenha a grade. Sem isto o scroll voltava para o começo
+   a cada preenchimento. Guardamos onde a pessoa está e devolvemos depois. */
+function contextoUI(){
+  const painel = document.getElementById('p-' + ui.tab);
+  const rolagens = painel ? [...painel.querySelectorAll('.grid-wrap')].map(g => [g.scrollLeft, g.scrollTop]) : [];
+  const a = document.activeElement;
+  let foco = null, selecao = null;
+  if (a && painel && painel.contains(a)){
+    const d = a.dataset || {}, partes = [];
+    if (d.i !== undefined) partes.push(`[data-i="${d.i}"]`);
+    if (d.f !== undefined) partes.push(`[data-f="${d.f}"]`);
+    if (d.et !== undefined) partes.push(`[data-et="${d.et}"]`);
+    if (d.ck !== undefined) partes.push(`[data-ck="${d.ck}"]`);
+    if (d.k !== undefined) partes.push(`[data-k="${d.k}"]`);
+    if (partes.length){
+      foco = partes.join('');
+      if (a.selectionStart != null) selecao = [a.selectionStart, a.selectionEnd];
+    }
+  }
+  return { y: window.scrollY, rolagens, foco, selecao };
+}
+function restaurarUI(ctx){
+  const painel = document.getElementById('p-' + ui.tab);
+  aplicarRolagens(painel, ctx);
+  if (ctx.foco && painel){
+    const el = painel.querySelector(ctx.foco);
+    if (el && el.focus){
+      el.focus({preventScroll:true});
+      if (ctx.selecao && el.setSelectionRange){
+        try { el.setSelectionRange(ctx.selecao[0], ctx.selecao[1]); } catch(e){}
+      }
+      /* Alguns navegadores rolam para revelar o campo mesmo com preventScroll.
+         Devolvemos a posição depois do foco, e de novo no quadro seguinte. */
+      aplicarRolagens(painel, ctx);
+      requestAnimationFrame(() => aplicarRolagens(document.getElementById('p-' + ui.tab), ctx));
+    }
+  }
+}
+function aplicarRolagens(painel, ctx){
+  if (!painel) return;
+  [...painel.querySelectorAll('.grid-wrap')].forEach((g, n) => {
+    if (ctx.rolagens[n]){
+      if (g.scrollLeft !== ctx.rolagens[n][0]) g.scrollLeft = ctx.rolagens[n][0];
+      if (g.scrollTop !== ctx.rolagens[n][1]) g.scrollTop = ctx.rolagens[n][1];
+    }
+  });
+  if (window.scrollY !== ctx.y) window.scrollTo(0, ctx.y);
+}
+/* Use estas duas em vez de chamar o render direto depois de uma edição. */
+function redesenhar(){ const c = contextoUI(); RENDER[ui.tab](); restaurarUI(c); }
+/* Campo de data é digitado em três pedaços — dia, mês, ano. O navegador avisa
+   "mudou" assim que a data fica válida, ainda no meio da digitação do ano, e
+   redesenhar ali joga o cursor de volta para o dia: a pessoa nunca consegue
+   terminar de escrever o ano. Então, em data, o desenho espera ela sair do
+   campo. O dado em si é gravado na hora, como nos outros campos. */
+let relogioData = null;
+function redesenharDepois(el){
+  /* Em data, o desenho espera a pessoa sair do campo. Não dá para amarrar isso
+     ao focusout: o navegador dispara "mudou" várias vezes durante a digitação,
+     em ordens diferentes conforme o caminho (teclado, setas, calendário).
+     Então o campo é simplesmente vigiado: enquanto tiver o foco, não redesenha. */
+  if (el && el.type === 'date'){
+    clearTimeout(relogioData);
+    const espera = () => {
+      if (document.activeElement === el){ relogioData = setTimeout(espera, 250); return; }
+      redesenhar();
+    };
+    relogioData = setTimeout(espera, 250);
+    return;
+  }
+  redesenhar();
+}
+function redesenharTudo(){ const c = contextoUI(); render(); restaurarUI(c); }
+
+/* ============================================================ EDIÇÃO */
+/* Gravação automática: um relógio que reinicia a cada alteração e dispara
+   quando a pessoa para. Grava também ao esconder a aba, porque muita gente
+   fecha o computador sem clicar em nada. */
+const AUTO_MS = 25000;      /* parou de digitar há tanto tempo: grava */
+const BUSCA_MS = 45000;     /* de tanto em tanto tempo: procura o que as outras fizeram */
+let relogioAuto = null, relogioBusca = null;
+const autoLigado = () => S && S.params && S.params.autoSalvar !== false;
+const buscaLigada = () => S && S.params && S.params.autoBuscar !== false;
+/* O par: enquanto há coisa não gravada, quem manda é o relógio do Salvar;
+   com tudo gravado, o sistema aproveita para trazer o que as outras fizeram.
+   Nunca puxa no meio da digitação — a tela mudaria debaixo da mão da pessoa. */
+function ligarBusca(){
+  clearInterval(relogioBusca);
+  relogioBusca = setInterval(() => {
+    if (!buscaLigada() || !sincLigada() || desatualizado) return;
+    if (sujo || salvando || sincronizando || document.hidden) return;
+    if (document.getElementById('modal') && !document.getElementById('modal').hidden) return;
+    if (Date.now() - ultimoPuxao < BUSCA_MS - 2000) return;
+    puxar(true);
+  }, 15000);
+}
+function agendarAuto(){
+  clearTimeout(relogioAuto);
+  if (!autoLigado() || !podeGravar()) return;
+  relogioAuto = setTimeout(() => {
+    if (sujo && !salvando && !document.hidden) salvar();
+  }, AUTO_MS);
+}
+function marcarSujo(){
+  sujo = true;
+  document.getElementById('btn-save').disabled = !podeGravar();
+  estado();
+  agendarAuto();
+}
+/* Dá para gravar por três caminhos: a plataforma, a sincronização pelo GitHub
+   ou, em último caso, o próprio navegador. Basta um deles estar de pé. */
+const podeGravar = () => !desatualizado && (podeSalvar || sincLigada() || soLocal);
+function estado(msg, cls){
+  const bs = document.getElementById('btn-save');
+  if (bs) bs.disabled = salvando || !podeGravar();
+  const el = document.getElementById('savestate');
+  el.className = 'savestate' + (cls ? ' '+cls : '');
+  el.textContent = msg != null ? msg
+    : salvando ? 'salvando…'
+    : desatualizado ? 'página desatualizada — aperte Ctrl+Shift+R'
+    : !podeGravar() ? 'somente leitura nesta visualização'
+    : sincLigada() ? (sujo ? 'alterações não gravadas no repositório' : 'gravado no repositório')
+    : soLocal ? 'salvo no seu navegador · não enviado'
+    : sujo ? 'alterações não salvas'
+    : COFRE ? (ehAdmin() ? 'tudo salvo · administradora' : 'tudo salvo · equipe')
+    : 'tudo salvo';
+  if (!cls) el.className = 'savestate' + (!podeGravar() ? ' err' : sujo ? ' dirty' : '');
+}
+
+const COLECAO = { vagas:'vagas', experiencia:'experiencia',
+  admissao:'admissao', integracao:'integracao', contratos:'contratos', uniformes:'uniformes' };
+function colecaoAtual(){ return COLECAO[ui.tab]; }
+
+/* Buscar sem perder a mão. Redesenhar a aba recria a caixa de busca, e a caixa
+   nova nasce com o cursor no comeco — era impossível digitar a segunda letra.
+   Agora esperamos a pessoa parar de digitar, guardamos onde o cursor estava e
+   devolvemos ele ao mesmo lugar na caixa nova. */
+let relogioFiltro = null;
+function buscando(id, atribuir, redesenha){
+  clearTimeout(relogioFiltro);
+  relogioFiltro = setTimeout(() => {
+    const antes = document.getElementById(id);
+    if (!antes) return;
+    const pos = antes.selectionStart, texto = antes.value;
+    atribuir(texto);
+    redesenha();
+    const depois = document.getElementById(id);
+    if (!depois) return;
+    if (depois.value !== texto) depois.value = texto;
+    depois.focus();
+    try { depois.setSelectionRange(pos, pos); } catch (e) {}
+  }, 180);
+}
+
+const BUSCAS = [
+  ['v-busca', v => ui.vBusca = v, () => renderVagas()],
+  ['e-busca', v => ui.eBusca = v, () => renderExperiencia()],
+  ['a-busca', v => ui.aBusca = v, () => renderAdmissao()],
+  ['i-busca', v => ui.iBusca = v, () => renderIntegracao()],
+  ['k-busca', v => ui.kBusca = v, () => renderContratos()],
+  ['u-busca', v => ui.uBusca = v, () => renderUniformes()],
+];
+document.addEventListener('input', ev => {
+  const t = ev.target;
+  const b = BUSCAS.find(([id]) => t.matches('#' + id));
+  if (b){ buscando(b[0], b[1], b[2]); return; }
+});
+
+document.addEventListener('change', ev => {
+  const t = ev.target;
+  if (t.dataset.emp){ ui.emp[t.dataset.emp] = t.value; render(); return; }
+  if (t.dataset.expDe !== undefined){ ui.eDe = t.value; renderExperiencia(); return; }
+  if (t.dataset.expAte !== undefined){ ui.eAte = t.value; renderExperiencia(); return; }
+  if (t.dataset.intDe !== undefined){ ui.iDe = t.value; renderIntegracao(); return; }
+  if (t.dataset.intAte !== undefined){ ui.iAte = t.value; renderIntegracao(); return; }
+  if (t.dataset.conDe !== undefined){ ui.kDe = t.value; renderContratos(); return; }
+  if (t.dataset.conAte !== undefined){ ui.kAte = t.value; renderContratos(); return; }
+  if (t.dataset.uniDe !== undefined){ ui.uDe = t.value; renderUniformes(); return; }
+  if (t.dataset.uniAte !== undefined){ ui.uAte = t.value; renderUniformes(); return; }
+
+  if (t.dataset.lista !== undefined){
+    const k = t.dataset.lista, j = +t.dataset.j, antigo = S.listas[k][j];
+    const novo = k === 'feriados' ? t.value.trim() : caixaAlta(t.value.trim());
+    if (!novo){ t.value = antigo; toast('Para remover o item, use o ✕ ao lado'); return; }
+    if (novo === antigo) return;
+    if (S.listas[k].some((x, n) => x === novo && n !== j)){ t.value = antigo; toast('Esse item já existe na lista'); return; }
+    const n = contarUso(META(k), antigo);
+    S.listas[k][j] = novo;
+    /* a cor é guardada pelo nome do status: renomeou, a cor vai junto */
+    const escolhidas = S.params.cores && S.params.cores[k];
+    if (escolhidas && escolhidas[antigo]){ escolhidas[novo] = escolhidas[antigo]; delete escolhidas[antigo]; }
+    renomearValor(META(k), antigo, novo);
+    if (k === 'feriados') delete S._feriados;
+    marcarSujo(); redesenharTudo();
+    toast(n ? `Renomeado em ${n} registro${n>1?'s':''}` : 'Renomeado');
+    return;
+  }
+  if (t.dataset.pempUni !== undefined){
+    const e = t.dataset.pempUni;
+    const lista = S.params.empresasUniforme = (S.params.empresasUniforme || []).filter(x => x !== e);
+    if (t.checked) lista.push(e);
+    marcarSujo(); redesenharTudo(); return;
+  }
+  if (t.dataset.cor !== undefined){
+    guardarCor(t.dataset.cor, t.dataset.val, t.value);
+    marcarSujo(); redesenharTudo(); return;
+  }
+  if (t.dataset.pauto !== undefined){
+    S.params.autoSalvar = t.checked; marcarSujo(); redesenharTudo(); return;
+  }
+  if (t.dataset.pbuscar !== undefined){
+    S.params.autoBuscar = t.checked; marcarSujo(); redesenharTudo(); return;
+  }
+  if (t.dataset.usNome !== undefined){
+    const u = usuarios().find(x => x.id === t.dataset.usNome);
+    if (u){ const n = caixaAlta(t.value.trim()); if (n){ u.nome = n; usuariosMexidos.add(u.id); if (EU && EU.id === u.id) EU = u; marcarSujo(); render(); } else t.value = u.nome; }
+    return;
+  }
+  if (t.dataset.usPapel !== undefined){
+    const u = usuarios().find(x => x.id === t.dataset.usPapel);
+    if (u){ u.papel = t.value; usuariosMexidos.add(u.id); if (EU && EU.id === u.id) PAPEL = t.value; marcarSujo(); telaUsuarios(); render(); }
+    return;
+  }
+  if (t.dataset.usAtivo !== undefined){
+    const u = usuarios().find(x => x.id === t.dataset.usAtivo);
+    if (u){ u.ativo = t.checked; usuariosMexidos.add(u.id); marcarSujo(); telaUsuarios(); render(); }
+    return;
+  }
+  if (t.dataset.pemp !== undefined){
+    S.params.empresaIntegracao = t.value; marcarSujo(); redesenharTudo(); return;
+  }
+  if (t.dataset.p !== undefined){
+    S.params[t.dataset.p] = Number(t.value); marcarSujo(); redesenharTudo(); return;
+  }
+  if (t.dataset.slaEtapa !== undefined){
+    S.params.etapas[+t.dataset.slaEtapa].sla = Number(t.value); marcarSujo(); redesenharTudo(); return;
+  }
+  if (t.dataset.sla !== undefined){
+    S.vagas[+t.dataset.i].medirSla = t.checked; marcarSujo(); redesenhar(); return;
+  }
+  const tb = t.closest('tbody');
+  const col = (tb && tb.dataset.col) || colecaoAtual();
+  if (!col) return;
+  if (t.dataset.et !== undefined){
+    S.vagas[+t.dataset.i].etapas[+t.dataset.et] = t.value || null;
+    marcarSujo(); redesenharDepois(t); return;
+  }
+  if (t.dataset.base !== undefined && t.value === '__novo__'){
+    const obj = S[col][+t.dataset.i], f = t.dataset.f, lk = t.dataset.base;
+    t.value = obj[f] || '';
+    cadastrarNaBase(lk, novo => { obj[f] = novo; marcarSujo(); redesenharTudo(); });
+    return;
+  }
+  if (t.dataset.f !== undefined){
+    const obj = S[col][+t.dataset.i], f = t.dataset.f;
+    if (t.type === 'number') obj[f] = (t.value === '' ? null : Number(t.value));
+    else if (t.type === 'date') obj[f] = (t.value || null);
+    else { obj[f] = padronizar(f, t.value) || ''; if (obj[f] !== t.value) t.value = obj[f]; }
+    marcarSujo();
+    if (col === 'admissao'){
+      const novos = sincronizarExperiencia(obj).concat(sincronizarIntegracao(obj),
+                      sincronizarContratos(obj), sincronizarUniformes(obj));
+      if (novos.length) toast(`${novos[0]} entrou nos controles seguintes`);
+    }
+    if (col === 'vagas'){
+      const antes = ['experiencia','integracao','uniformes','contratos']
+        .reduce((t,c) => t + S[c].filter(x => x.idVaga === obj.id).length, 0);
+      const novos = propagarVaga(obj);
+      if (novos.length) toast('Vaga fechada — ' + novos[0] + ' entrou na Admissão e nos controles seguintes');
+      else if (antes && ESPELHADOS.includes(f)) toast('Atualizado também nas outras abas');
+    }
+    redesenharDepois(t);
+  }
+});
+
+document.addEventListener('keydown', ev => {
+  const t = ev.target;
+  if (ev.key === 'Escape'){
+    const md = document.getElementById('modal');
+    if (resolveConf || (md && !md.hidden)){ ev.preventDefault(); fecharModal(false); return; }
+  }
+  if (ev.key === 'Enter' && t.dataset && t.dataset.ladd){
+    ev.preventDefault(); addValor(t.dataset.ladd, t.value); t.value = ''; t.focus();
+  }
+});
+
+/* O checklist da Base e a coluna de respostas de cada admissão são a mesma
+   lista, lado a lado. Toda vez que a Base muda — item entra, sai ou troca de
+   posição — as respostas têm que andar junto, senão o "SIM" de uma tarefa vai
+   parar em outra. O percentual se recalcula sozinho a partir disso. */
+function checklistEntrou(pos){
+  S.admissao.forEach(a => {
+    if (!Array.isArray(a.itens)) a.itens = [];
+    a.itens.splice(pos, 0, 'NÃO');
+  });
+}
+function checklistSaiu(pos){
+  S.admissao.forEach(a => { if (Array.isArray(a.itens)) a.itens.splice(pos, 1); });
+}
+function checklistTrocou(a1, a2){
+  S.admissao.forEach(a => {
+    if (!Array.isArray(a.itens)) return;
+    const x = a.itens[a1]; a.itens[a1] = a.itens[a2]; a.itens[a2] = x;
+  });
+}
+/* rede de segurança: deixa toda admissão com exatamente o tamanho da lista */
+function alinharChecklist(){
+  const n = S.listas.checklist.length;
+  S.admissao.forEach(a => {
+    if (!Array.isArray(a.itens)) a.itens = [];
+    while (a.itens.length < n) a.itens.push('NÃO');
+    a.itens.length = n;
+  });
+}
+
+function addValor(k, v){
+  if (k !== 'feriados') v = caixaAlta(String(v || '').trim());
+  v = (v || '').trim();
+  if (!v) return;
+  const L = S.listas[k];
+  if (L.includes(v)){ toast('"'+v+'" já está na lista'); return; }
+  L.push(v);
+  if (k === 'checklist') checklistEntrou(L.length - 1);
+  if (!META(k).ordenada) L.sort((a,b) => a.localeCompare(b,'pt-BR'));
+  if (k === 'feriados') delete S._feriados;
+  marcarSujo(); render(); toast('"'+v+'" adicionado');
+}
+
+const MODELO = {
+  notas: () => ({ id:proxId('notas','N'), texto:'', idVaga:'', quando:null, feito:false, criada:iso(HOJE) }),
+  admissao:  () => ({ id:proxId('admissao','A'), idVaga:'', itens:S.listas.checklist.map(()=> 'NÃO'), obs:'' }),
+  integracao:() => ({ id:proxId('integracao','I'), idVaga:'', admissao:iso(HOJE), nome:'',
+                      empresa:S.params.empresaIntegracao||'', setor:'', gestor:'', feito:'NÃO',
+                      dataIntegr:null, obs:'' }),
+  contratos: () => ({ id:proxId('contratos','K'), idVaga:'', nome:'', empresa:'', faculdade:'',
+                      solic:iso(HOJE), retorno:null, assinado:null, obs:'' }),
+  uniformes: () => ({ id:proxId('uniformes','U'), idVaga:'', empresa:'', nome:'', vaga:'',
+                      nascimento:null, telefone:'', cpf:'', admissao:null, cargo:'', setor:'',
+                      terceiro:'NA', sapato:'', camisa:'', calca:'', entregue:'',
+                      dataEntrega:null, obs:'' }),
+};
+/* Um clique e a aba se alimenta de tudo que já está pronto do lado de lá.
+   Cada ponte tem sua própria regra de quem entra; aqui só varremos tudo. */
+const PONTES = {
+  admissao:   {fn: () => { const n = sincronizarAdmissao();
+                 S.vagas.forEach(v => propagarVaga(v)); return n; }, de: 'das vagas fechadas'},
+  experiencia:{fn: () => sincronizarExperiencia(),de: 'da admissão'},
+  integracao: {fn: () => sincronizarIntegracao(), de: 'da admissão'},
+  contratos:  {fn: () => sincronizarContratos(),  de: 'da admissão'},
+  uniformes:  {fn: () => sincronizarUniformes(),  de: 'da admissão'},
+};
+function lancarPendentes(col){
+  const p = PONTES[col];
+  if (!p) return;
+  const novos = p.fn();
+  if (!novos.length){ toast('Nada pendente ' + p.de + ' — tudo já está lançado'); return; }
+  marcarSujo(); render();
+  toast(novos.length + ' lançamento(s) ' + p.de + ': ' + novos.slice(0,3).join(', ')
+        + (novos.length > 3 ? ' e mais…' : ''));
+}
+
+function novoRegistro(col){
+  S[col].unshift(MODELO[col]());
+  marcarSujo(); render(); toast('Registro criado');
+}
+
+/* Ordenar clicando no cabeçalho — vem antes por ser <th>, não <button>. */
+document.addEventListener('click', ev => {
+  const th = ev.target.closest('th.ord');
+  if (!th) return;
+  cicloOrdem(th.dataset.ord, th.dataset.campo);
+  render();
+});
+
+document.addEventListener('click', async ev => {
+  const t = ev.target.closest('button, [data-tab]');
+  if (!t) return;
+  if (t.dataset.conf !== undefined){ fecharModal(t.dataset.conf === '1'); return; }
+  if (t.dataset.ordreset){ delete ui.sort[t.dataset.ordreset]; render(); return; }
+  if (t.dataset.expLimpa !== undefined){ ui.eDe = ''; ui.eAte = ''; renderExperiencia(); return; }
+  if (t.dataset.intLimpa !== undefined){ ui.iDe = ''; ui.iAte = ''; renderIntegracao(); return; }
+  if (t.dataset.conLimpa !== undefined){ ui.kDe = ''; ui.kAte = ''; renderContratos(); return; }
+  if (t.dataset.uniLimpa !== undefined){ ui.uDe = ''; ui.uAte = ''; renderUniformes(); return; }
+  if (t.dataset.intPreencher !== undefined){
+    const alvo = (S.params.empresaIntegracao || '').trim();
+    let n = 0;
+    S.integracao.forEach(g => { if (!g.empresa){ g.empresa = alvo; n++; } });
+    marcarSujo(); redesenhar(); toast(`${n} registro${n>1?'s marcados':' marcado'} como ${alvo}`);
+    return;
+  }
+  if (t.dataset.tab){ ui.tab = t.dataset.tab; render(); return; }
+  if (t.dataset.vf){ ui.vFiltro = t.dataset.vf; renderVagas(); return; }
+  if (t.dataset.ef){ ui.eFiltro = t.dataset.ef; renderExperiencia(); return; }
+  if (t.dataset.af){ ui.aFiltro = t.dataset.af; renderAdmissao(); return; }
+  if (t.dataset.if){ ui.iFiltro = t.dataset.if; renderIntegracao(); return; }
+  if (t.dataset.kf){ ui.kFiltro = t.dataset.kf; renderContratos(); return; }
+  if (t.dataset.ck !== undefined){
+    const i = +t.dataset.ck, k = +t.dataset.k, a = S.admissao[i];
+    const ciclo = { '': 'SIM', 'NÃO': 'SIM', 'SIM': 'N/A', 'N/A': 'NÃO' };
+    a.itens[k] = ciclo[a.itens[k] || ''];
+    marcarSujo();
+    /* Atualiza só esta linha: a grade não é reconstruída, então nada se move
+       e a próxima tarefa continua debaixo do cursor. */
+    const val = a.itens[k] || '';
+    t.className = 'ck ' + (val==='SIM'?'ck-sim':val==='NÃO'?'ck-nao':val==='N/A'?'ck-na':'');
+    t.textContent = val==='SIM'?'✓':val==='NÃO'?'·':val==='N/A'?'–':'';
+    t.title = (S.listas.checklist[k]||'') + ' — ' + (val||'não definido');
+    const tr = t.closest('tr'), c = calcAdm(a);
+    const cs = tr.querySelector('.cel-situacao'), cp = tr.querySelector('.cel-pct'), cx = tr.querySelector('.cel-prox');
+    if (cs) cs.innerHTML = `<span class="pill ${c.situacao.k}">${c.situacao.t}</span>`;
+    if (cp) cp.innerHTML = barraPct(c.pct);
+    if (cx) cx.textContent = c.proxima;
+    const novos = sincronizarExperiencia(a);
+    const novosI = sincronizarIntegracao(a);
+    const novosK = sincronizarContratos(a);
+    const novosU = sincronizarUniformes(a);
+    if (novos.length || novosI.length || novosK.length || novosU.length){
+      const onde = [novos.length ? 'experiência' : '', novosI.length ? 'integração' : '',
+                    novosK.length ? 'contratos' : '', novosU.length ? 'uniformes' : ''].filter(Boolean).join(' e ');
+      toast(`${novos[0] || novosI[0] || novosK[0] || novosU[0]} entrou em ${onde}`);
+    }
+    renderTabs();
+    return;
+  }
+  if (t.dataset.laddbtn){
+    const k = t.dataset.laddbtn, inp = document.querySelector(`[data-ladd="${k}"]`);
+    addValor(k, inp.value); inp.value = ''; return;
+  }
+  if (t.dataset.lfix){ addValor(t.dataset.lfix, t.dataset.val); return; }
+  if (t.dataset.lrm){
+    const k = t.dataset.lrm, j = +t.dataset.j, v = S.listas[k][j], n = contarUso(META(k), v);
+    if (k === 'checklist'){
+      const marcadas = S.admissao.filter(a => a.itens && a.itens[j] === 'SIM').length;
+      const ok = await confirmar('Tirar esta tarefa do checklist?',
+        `<b>${esc(v)}</b> sai do checklist de <b>todas</b> as admissões` +
+        (marcadas ? `, inclusive das <b>${marcadas}</b> em que ela já estava marcada como SIM` : '') +
+        `. As outras respostas continuam onde estão e o percentual se recalcula sozinho.`,
+        'Tirar do checklist');
+      if (!ok) return;
+      S.listas.checklist.splice(j, 1);
+      checklistSaiu(j);
+      marcarSujo(); render();
+      toast(`"${v}" saiu do checklist — percentuais recalculados`);
+      return;
+    }
+    if (n){
+      const ok = await confirmar('Remover da lista?',
+        `<b>${esc(v)}</b> está em <b>${n} registro${n>1?'s':''}</b>. Os registros continuam com esse valor, ` +
+        `mas ele sai do menu suspenso e passa a aparecer aqui como “fora da lista, mas em uso”. ` +
+        `Se a ideia é corrigir a grafia, feche isto e edite o nome — a correção vale para os ${n} de uma vez.`);
+      if (!ok) return;
+    }
+    S.listas[k].splice(j, 1);
+    if (S.params.cores && S.params.cores[k]) delete S.params.cores[k][v];
+    if (k === 'checklist') checklistSaiu(j);      /* a resposta sai junto com a tarefa */
+    if (k === 'feriados') delete S._feriados;
+    marcarSujo(); render();
+    toast(k === 'checklist'
+      ? `"${v}" saiu do checklist — o percentual de todas as admissões foi recalculado`
+      : `"${v}" removido da lista`); return;
+  }
+  if (t.dataset.mv){
+    const k = t.dataset.mv, j = +t.dataset.j, d = +t.dataset.dir, L = S.listas[k];
+    if (j + d < 0 || j + d >= L.length) return;
+    if (k === 'checklist') checklistTrocou(j, j + d);
+    const x = L[j]; L[j] = L[j+d]; L[j+d] = x;
+    marcarSujo(); render(); return;
+  }
+  if (t.id==='a-lancar'){ lancarPendentes('admissao'); return; }
+  if (t.id==='i-lancar'){ lancarPendentes('integracao'); return; }
+  if (t.id==='k-lancar'){ lancarPendentes('contratos'); return; }
+  if (t.id==='u-lancar'){ lancarPendentes('uniformes'); return; }
+  if (t.id==='u-folha'){ ui.uFolha = true; renderUniformes(); return; }
+  if (t.id==='u-folha-sair'){ ui.uFolha = false; renderUniformes(); return; }
+  if (t.id==='e-lancar'){ lancarPendentes('experiencia'); return; }
+  if (t.id==='i-add'){ novoRegistro('integracao'); return; }
+  if (t.id==='k-add'){ novoRegistro('contratos'); return; }
+  if (t.id==='u-add'){ novoRegistro('uniformes'); return; }
+  if (t.id==='v-add'){ novaVaga(); return; }
+  if (t.dataset.calvista !== undefined){ ui.calVista = t.dataset.calvista; renderCalendario(); return; }
+  if (t.dataset.caltipo !== undefined){
+    const k = t.dataset.caltipo;
+    ui.calFora = ui.calFora || [];
+    ui.calFora = ui.calFora.includes(k) ? ui.calFora.filter(x => x !== k) : ui.calFora.concat(k);
+    renderCalendario(); return;
+  }
+  if (t.dataset.calmes !== undefined){
+    const d = +t.dataset.calmes;
+    if (!d) ui.calMes = null;
+    else {
+      const base = ui.calMes ? parseD(ui.calMes + '-01') : new Date(HOJE.getFullYear(), HOJE.getMonth(), 1);
+      base.setMonth(base.getMonth() + d);
+      ui.calMes = base.getFullYear() + '-' + String(base.getMonth() + 1).padStart(2, '0');
+    }
+    renderCalendario(); return;
+  }
+  if (t.dataset.calok !== undefined){
+    const i = +t.dataset.calok, c = CAL_ITENS[i];
+    if (c && c.modo === 'simnao') telaCompromisso(i);
+    else resolverCompromisso(i, iso(HOJE));
+    return;
+  }
+  if (t.dataset.cal !== undefined){ telaCompromisso(+t.dataset.cal); return; }
+  if (t.dataset.cpok !== undefined){
+    const d = document.getElementById('cp-data');
+    resolverCompromisso(+t.dataset.cpok, d ? d.value : null); return;
+  }
+  if (t.dataset.cpsn !== undefined){ resolverCompromisso(+t.dataset.cpsn, t.dataset.v); return; }
+  if (t.dataset.calir !== undefined){ fecharModal(0); ui.tab = t.dataset.calir; render(); window.scrollTo(0,0); return; }
+  if (t.id==='n-add'){ novaAnotacao(); return; }
+  if (t.id==='p-zerar'){
+    const q = COLECOES.reduce((n,c) => n + (S[c]||[]).length, 0);
+    confirmar('Zerar todos os registros?',
+      'Serão apagados <b>' + q + '</b> registro(s) de todas as abas de lançamento. A Base e os parâmetros continuam como estão.',
+      'Zerar tudo').then(ok => {
+        if (!ok) return;
+        COLECOES.forEach(c => { S[c] = []; });
+        marcarSujo(); render(); toast('Sistema zerado — a Base continua completa');
+      });
+    return;
+  }
+  if (t.id==='n-limpar'){
+    const q = S.notas.filter(n => n.feito).length;
+    confirmar('Limpar anotações concluídas?',
+      'As <b>' + q + '</b> anotação(ões) já marcadas como resolvidas serão apagadas. As em aberto continuam.',
+      'Apagar').then(ok => {
+        if (!ok) return;
+        S.notas = S.notas.filter(n => !n.feito); marcarSujo(); redesenhar();
+        toast(q + ' anotação(ões) apagada(s)');
+      });
+    return;
+  }
+  if (t.dataset.nck !== undefined){
+    const n = S.notas.find(x => x.id === t.dataset.nck);
+    if (n){ n.feito = !n.feito; marcarSujo(); redesenhar(); }
+    return;
+  }
+  if (t.dataset.nrm !== undefined){
+    const n = S.notas.find(x => x.id === t.dataset.nrm);
+    if (!n) return;
+    const apagar = () => { S.notas = S.notas.filter(x => x.id !== n.id); marcarSujo(); redesenhar(); toast('Anotação apagada'); };
+    if (n.feito) { apagar(); return; }
+    confirmar('Apagar esta anotação?', 'Ela ainda está em aberto: <b>' + esc(n.texto.slice(0,80)) + '</b>', 'Apagar')
+      .then(ok => { if (ok) apagar(); });
+    return;
+  }
+  if (t.dataset.nvaga !== undefined){
+    ui.vBusca = t.dataset.nvaga; ui.vFiltro = 'todas';
+    redesenhar();
+    const b = document.getElementById('v-busca'); if (b){ b.value = ui.vBusca; }
+    const alvo = document.querySelector('#p-vagas tbody tr td.idcell');
+    if (alvo) alvo.scrollIntoView({block:'center'});
+    return;
+  }
+  if (t.id==='e-add'){ novoColaborador(); return; }
+  if (t.dataset.del){
+    const col = t.dataset.del, i = +t.dataset.i;
+    const nome = S[col][i].nome || S[col][i].cargo || S[col][i].idVaga || S[col][i].id;
+    const ok = await confirmar('Excluir registro?',
+      `<b>${esc(nome || 'Este registro')}</b> será apagado da aba. Não dá para desfazer, ` +
+      `mas nada é gravado até você clicar em Salvar.`, 'Excluir');
+    if (ok){ S[col].splice(i,1); marcarSujo(); render(); toast('Registro excluído'); }
+    return;
+  }
+  if (t.id==='btn-save'){ salvar(); return; }
+  if (t.id==='btn-csv'){ exportarCSV(); return; }
+  if (t.id==='btn-pacote' || t.id==='av-enviar'){ gerarPacote(); return; }
+  if (t.id==='btn-backup'){ gerarPacote(true); return; }
+  if (t.id==='btn-sinc'){ puxar(); return; }
+  if (t.id==='p-sinc'){ telaSinc(); return; }
+  if (t.id==='us-add'){ adicionarUsuario(); return; }
+  if (t.id==='us-trocar'){ trocarSenhaUsuario(); return; }
+  if (t.dataset.usRm !== undefined){ removerUsuario(t.dataset.usRm); return; }
+  if (t.id==='sc-salvar'){ guardarSinc(); return; }
+  if (t.id==='sc-testar'){ testarSinc(); return; }
+  if (t.id==='sc-esquecer'){ esquecerToken(); return; }
+  if (t.id==='pk-copiar'){ copiarPacote(); return; }
+  if (t.id==='p-receber'){ telaReceber(); return; }
+  if (t.id==='nb-ok'){ confirmarCadastro(); return; }
+  if (t.id==='rc-ler'){ lerPacote(); return; }
+  if (t.id==='rc-aplicar'){ aplicarPacote(); return; }
+  if (t.id==='av-descartar'){
+    confirmar('Descartar a cópia deste navegador?',
+      'Você volta para a versão que está publicada. Tudo que foi lançado aqui e ainda não foi enviado <b>some</b>.',
+      'Descartar').then(ok => { if (ok){ apagarLocal(); location.reload(); } });
+    return;
+  }
+  if (t.id==='ex-copiar'){ copiarCSV(); return; }
+  if (t.id==='p-senha'){ COFRE ? telaUsuarios() : telaSenhas(); return; }
+  if (t.id==='sn-ok'){ aplicarSenhas(); return; }
+  if (t.id==='sn-remover'){ fecharModal(0); removerProtecao(); return; }
+});
+
+function proxId(col, pref){
+  let m = 0;
+  S[col].forEach(x => { const n = parseInt(String(x.id||'').replace(/\D/g,''),10); if (n>m) m=n; });
+  const base = pref + String(m+1).padStart(4,'0');
+  /* quem trabalha pelo link ganha um sufixo: assim o registro dela nunca cai
+     em cima de um registro que a administradora criou no mesmo intervalo */
+  if (PAPEL === 'equipe' || soLocal){
+    const t = Math.floor(Math.random()*1296).toString(36).toUpperCase().padStart(2,'0');
+    return base + 'E' + t;
+  }
+  return base;
+}
+function novaVaga(){
+  S.vagas.unshift({ id: proxId('vagas','V'), empresa:'', cargo:'', depto:'', tipo:'', substituido:'',
+    gestor:'', salario:null, abertura: iso(HOJE), status:'TRIAR', prioridade:'',
+    etapas: Array((S.params.etapas||[]).length || 8).fill(null), aprovado:'', inicio:null, talent:'', medirSla:true, obs:'' });
+  ui.vFiltro='abertas'; ui.vBusca=''; ui.emp.vagas=''; marcarSujo(); render();
+  toast('Vaga criada — preencha empresa e cargo');
+}
+function novoColaborador(){
+  S.experiencia.unshift({ id: proxId('experiencia','E'), idVaga:'', nome:'', empresa:'', cargo:'', depto:'',
+    gestor:'', admissao: iso(HOJE), env1:null, prorrog:'', env2:null, efetiv:'', obs:'' });
+  ui.eFiltro='pendentes'; ui.eBusca=''; marcarSujo(); render();
+  toast('Colaborador criado');
+}
+
+let resolveConf = null;
+function confirmar(titulo, texto, rotulo){
+  return new Promise(res => {
+    resolveConf = res;
+    const el = document.getElementById('modal');
+    el.innerHTML = `<div class="modal-box" role="alertdialog" aria-modal="true" aria-labelledby="mt">
+      <h3 id="mt">${esc(titulo)}</h3><p>${texto}</p>
+      <div class="modal-acts"><button data-conf="0">Cancelar</button>
+      <button class="danger" data-conf="1">${esc(rotulo || 'Remover')}</button></div></div>`;
+    el.hidden = false;
+    el.querySelector('[data-conf="1"]').focus();
+  });
+}
+function fecharModal(v){
+  const el = document.getElementById('modal');
+  el.hidden = true; el.innerHTML = '';
+  if (resolveConf){ const r = resolveConf; resolveConf = null; r(v); }
+}
+
+let tt;
+function toast(msg){
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('on');
+  clearTimeout(tt); tt = setTimeout(() => el.classList.remove('on'), 2600);
+}
+
+
+/* ============================================================ CÉLULAS COM QUEBRA */
+function propagarSeVaga(col, obj){
+  if (col === 'vagas') propagarVaga(obj);
+  if (col === 'admissao'){
+    sincronizarExperiencia(obj); sincronizarIntegracao(obj);
+    sincronizarContratos(obj); sincronizarUniformes(obj);
+  }
+}
+function gravarWrap(el){
+  if (el.dataset.nedit !== undefined){
+    const n = S.notas.find(x => x.id === el.dataset.nedit);
+    const novo = el.textContent.replace(/\s+/g, ' ').trim();
+    if (!n || n.texto === novo) return false;
+    n.texto = novo; marcarSujo(); return true;
+  }
+  const col = (el.closest('tbody') && el.closest('tbody').dataset.col) || colecaoAtual();
+  if (!col) return;
+  const obj = S[col][+el.dataset.i], f = el.dataset.f;
+  const novo = padronizar(f, el.textContent.replace(/\s+/g, ' ').trim()) || '';
+  if ((obj[f] || '') === novo) return false;
+  obj[f] = novo;
+  if (el.textContent !== novo) el.textContent = novo;
+  propagarSeVaga(col, obj);
+  marcarSujo();
+  return true;
+}
+document.addEventListener('focusout', ev => {
+  const el = ev.target;
+  if (!el.classList || !el.classList.contains('wrap')) return;
+  fecharSugestoes();
+  if (gravarWrap(el)) redesenhar();
+});
+document.addEventListener('keydown', ev => {
+  if (ev.key === 'Enter' && ev.target.id === 'n-texto'){ ev.preventDefault(); novaAnotacao(); return; }
+  const el = ev.target;
+  if (!el.classList || !el.classList.contains('wrap')) return;
+  if (ev.key === 'Enter'){ ev.preventDefault(); el.blur(); }
+  else if (ev.key === 'Escape'){ ev.preventDefault(); fecharSugestoes(); el.blur(); }
+  else if (sugAberta && (ev.key === 'ArrowDown' || ev.key === 'ArrowUp')){
+    ev.preventDefault(); moverSugestao(ev.key === 'ArrowDown' ? 1 : -1);
+  } else if (sugAberta && ev.key === 'Tab'){ escolherSugestao(); }
+});
+/* Cola sempre como texto simples, para não entrar formatação na célula. */
+document.addEventListener('paste', ev => {
+  const el = ev.target;
+  if (!el.classList || !el.classList.contains('wrap')) return;
+  ev.preventDefault();
+  const txt = (ev.clipboardData || window.clipboardData).getData('text').replace(/\s+/g, ' ').trim();
+  document.execCommand('insertText', false, txt);
+});
+
+/* ---- sugestões para a célula de cargo (substitui o datalist, que não existe aqui) ---- */
+let sugAberta = null, sugIdx = -1;
+function fecharSugestoes(){
+  const c = document.getElementById('sugestoes');
+  if (c) c.remove();
+  sugAberta = null; sugIdx = -1;
+}
+function moverSugestao(d){
+  const itens = [...document.querySelectorAll('#sugestoes .sg')];
+  if (!itens.length) return;
+  sugIdx = (sugIdx + d + itens.length) % itens.length;
+  itens.forEach((x, k) => x.classList.toggle('sel', k === sugIdx));
+  itens[sugIdx].scrollIntoView({block:'nearest'});
+}
+function escolherSugestao(valor){
+  const el = sugAberta;
+  if (!el) return;
+  const itens = [...document.querySelectorAll('#sugestoes .sg')];
+  const v = valor != null ? valor : (sugIdx >= 0 && itens[sugIdx] ? itens[sugIdx].dataset.v : null);
+  if (v == null){ fecharSugestoes(); return; }
+  el.textContent = v;
+  fecharSugestoes();
+  if (gravarWrap(el)) redesenhar();
+}
+document.addEventListener('input', ev => {
+  const el = ev.target;
+  if (!el.classList || !el.classList.contains('wrap') || !el.dataset.sug) return;
+  const termo = el.textContent.trim().toLowerCase();
+  const lista = (S.listas[el.dataset.sug] || [])
+    .filter(o => o.toLowerCase().includes(termo)).slice(0, 8);
+  fecharSugestoes();
+  if (!termo || !lista.length) return;
+  sugAberta = el; sugIdx = -1;
+  const r = el.getBoundingClientRect();
+  const c = document.createElement('div');
+  c.id = 'sugestoes';
+  c.style.cssText = `left:${Math.round(r.left)}px;top:${Math.round(r.bottom + 2)}px;min-width:${Math.round(r.width)}px`;
+  c.innerHTML = lista.map(o => `<div class="sg" data-v="${esc(o)}">${esc(o)}</div>`).join('');
+  document.body.appendChild(c);
+});
+document.addEventListener('mousedown', ev => {
+  const sg = ev.target.closest && ev.target.closest('#sugestoes .sg');
+  if (sg){ ev.preventDefault(); escolherSugestao(sg.dataset.v); }
+});
+document.addEventListener('scroll', () => { if (sugAberta) fecharSugestoes(); }, true);
+
+/* ============================================================ SALVAR */
+let api = null;
+
+/* Plano A: publicar só o arquivo de dados — esta janela não recarrega.
+   Plano B: reescrever a página inteira com os dados novos — recarrega ao final. */
+async function publicarPaginaInteira(){
+  const r = await fetch(location.pathname, {cache:'no-store'});
+  if (!r.ok) throw { code:'upstream_error', message:'não consegui reler a página' };
+  const src = await r.text();
+  const re = /(<script type="application\/json" id="semente">)([\s\S]*?)(<\/script>)/;
+  if (!/^\s*<!doctype html/i.test(src) || !re.test(src))
+    throw { code:'invalid_content', message:'a página não está no formato esperado' };
+  const json = JSON.stringify(S).split('</').join('<\\/');
+  return api.publish(src.replace(re, (m, abre, velho, fecha) => abre + json + fecha));
+}
+
+/* A plataforma não deixa quem abriu por link gravar na cópia de todos.
+   Em vez de perder o trabalho, guarda no navegador dela e avisa como enviar. */
+async function salvarSoLocal(){
+  soLocal = true;
+  carimbarAutoria();
+  const ok = guardarLocal(await embrulharPacote());
+  sujo = false; salvando = false;
+  estado(); render();
+  toast(ok
+    ? 'Salvo no seu navegador. Para chegar até a administradora, use “Enviar alterações”.'
+    : 'Seu navegador não deixou guardar. Use “Enviar alterações” agora para não perder nada.');
+}
+
+async function salvar(){
+  if (sincLigada()){
+    if (salvando) return;
+    salvando = true;
+    document.getElementById('btn-save').disabled = true;
+    estado();
+    try {
+      const ok = await empurrar();
+      if (!ok) throw new Error('a gravação não foi confirmada pelo GitHub');
+      /* guarda também onde a plataforma deixar, como segunda cópia */
+      if (api) { try { await api.publish({ 'dados.json': await cargaParaSalvar() }); } catch (e) {} }
+      sujo = false; salvando = false; estado();
+      toast('Gravado no repositório (commit ' + String(shaRemoto || '').slice(0,7) + ') — a outra pessoa vê ao sincronizar');
+    } catch (e) {
+      salvando = false;
+      estado('falha ao gravar no repositório', 'err');
+      document.getElementById('btn-save').disabled = false;
+      toast('Não deu para gravar: ' + (erroDeRede(e) || e.message || e));
+    }
+    return;
+  }
+  if (soLocal){ await salvarSoLocal(); return; }
+  if (!api || salvando) return;
+  carimbarAutoria();
+  salvando = true;
+  document.getElementById('btn-save').disabled = true;
+  estado();
+  try {
+    try {
+      await api.publish({ 'dados.json': await cargaParaSalvar() });
+    } catch (e) {
+      if (e && e.code === 'capability_disabled') await publicarPaginaInteira();
+      else throw e;
+    }
+    sujo = false; salvando = false;
+    estado(); toast('Salvo — todos que abrirem verão esta versão');
+  } catch (err) {
+    salvando = false;
+    const code = err && err.code;
+    if (code === 'conflict'){
+      estado('outra pessoa salvou antes — recarregando', 'err');
+      toast('Outra pessoa salvou antes. A página vai recarregar com a versão dela.');
+    } else if (code === 'not_writer' || code === 'not_granted' || code === 'not_declared'
+            || code === 'capability_disabled' || code === 'consent_required'){
+      await salvarSoLocal();
+    } else if (code === 'rate_limited'){
+      estado('muitos salvamentos seguidos — aguarde', 'err');
+      document.getElementById('btn-save').disabled = false;
+    } else {
+      estado('falha ao salvar', 'err');
+      document.getElementById('btn-save').disabled = false;
+      toast('Não consegui salvar agora. Suas alterações continuam na tela.');
+    }
+  }
+}
+
+/* ============================================================ CSV */
+function csv(linhas){
+  return '﻿' + linhas.map(l => l.map(c => {
+    const s = c==null ? '' : String(c);
+    return /[";\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+  }).join(';')).join('\r\n');
+}
+/* Exporta a aba que está aberta, com as colunas calculadas junto. */
+function tabelaCSV(){
+  const P = S.params;
+  switch (ui.tab){
+    case 'experiencia': return ['experiencia',
+      [['Empresa','Gestor','Cargo','Colaborador','Admissão',
+        S.params.expP1+' dias', 'Situação '+S.params.expP1, 'Prorrogar',
+        S.params.expP2+' dias', 'Situação '+S.params.expP2, 'Efetivar',
+        'Dias de casa','Vaga de origem','1ª avaliação (histórico)','2ª avaliação (histórico)'],
+       ...S.experiencia.map(e => { const c = calcExp(e);
+         return [e.empresa, e.gestor, e.cargo, e.nome, fmtD(e.admissao),
+           fmtD(c.lim1), c.m1.t, e.prorrog, fmtD(c.lim2), c.m2.t, e.efetiv,
+           c.diasCasa, e.idVaga, fmtD(e.env1), fmtD(e.env2)]; })]];
+    case 'admissao': return ['admissao',
+      [['ID da vaga','Colaborador','Empresa','Cargo','Início','Situação','% concluído','Próxima pendência',
+        ...S.listas.checklist],
+       ...S.admissao.map(a => { const c = calcAdm(a);
+         return [a.idVaga, c.pessoa, c.empresa, c.cargo, fmtD(c.inicio), c.situacao.t,
+           Math.round(c.pct*100)+'%', c.proxima, ...a.itens]; })]];
+    case 'integracao': return ['integracao',
+      [['Colaborador','Admissão','Empresa','Setor','Gestor','Feito','Data da integração','Dias','Situação','Observações'],
+       ...S.integracao.map(g => { const c = calcIntegr(g);
+         return [g.nome, fmtD(g.admissao), g.empresa, g.setor, g.gestor, g.feito,
+           fmtD(g.dataIntegr), c.dias, c.t, g.obs]; })]];
+    case 'contratos': return ['contratos',
+      [['Empresa','Estagiário(a)','Instituição','Solicitação','Limite CIEE','Retorno CIEE',
+        'Dias úteis do CIEE','Prazo','Assinatura','Dias úteis da instituição','Situação','Vaga de origem','Observações'],
+       ...S.contratos.map(k => { const c = calcContrato(k);
+         return [k.empresa, k.nome, k.faculdade, fmtD(k.solic), fmtD(c.limite), fmtD(k.retorno),
+           c.diasRetorno, c.sla.t, fmtD(k.assinado), c.diasAssin, c.situacao.t, k.idVaga, k.obs]; })]];
+    case 'uniformes': return ['uniformes',
+      [['Empresa','Nome do colaborador','Vaga','Data de admissão','Função','Setor',
+        'Data de nascimento','Telefone','CPF','Se terceiro, empresa','Nº do calçado',
+        'Camisa','Calça','Entregue?','Data da entrega','Observações','Vaga de origem'],
+       ...S.uniformes.map(u => [u.empresa, u.nome, u.vaga, fmtD(u.admissao), u.cargo, u.setor,
+         fmtD(u.nascimento), u.telefone, u.cpf, u.terceiro, u.sapato,
+         u.camisa, u.calca, u.entregue, fmtD(u.dataEntrega), u.obs, u.idVaga])]];
+    default: return ['vagas',
+      [['ID','Empresa','Cargo','Departamento','Tipo','Gestor','Salário','Abertura',
+        ...P.etapas.map(e => e.n+'. '+e.nome), 'Status','Candidato aprovado','Data de admissão',
+        'Dias em aberto','Time to Fill','Time to Hire','Etapa atual','Dias na etapa','Aging',
+        'Etapas fora do SLA','Status SLA','Medir SLA','Observações'],
+       ...S.vagas.map(v => { const c = calcVaga(v);
+         return [v.id, v.empresa, v.cargo, v.depto, v.tipo, v.gestor, v.salario, fmtD(v.abertura),
+           ...v.etapas.map(fmtD), v.status, v.aprovado, fmtD(v.inicio),
+           c.dias, c.ttf, c.tth, c.etapaNome, c.diasEtapa, c.farol, c.fora, c.statusSla,
+           v.medirSla?'SIM':'NÃO', v.obs]; })]];
+  }
+}
+
+/* ============================================================ COFRE
+   Proteção por senha de verdade, não cortina: os dados são gravados
+   cifrados em AES-256-GCM. A chave dos dados é sorteada uma vez e
+   guardada duas vezes, embrulhada em cada senha (PBKDF2-SHA256,
+   310.000 rodadas, sal próprio). Sem uma das senhas não existe caminho
+   de volta — nem abrindo o código-fonte da página, porque o que está
+   lá é ruído. Trocar senha só reembrulha a chave; não mexe nos dados.
+
+   Duas senhas, dois papéis:
+     administradora — abre tudo, exporta, troca senhas, zera o sistema
+     equipe         — abre e lança, sem exportar e sem mexer na senha */
+
+const ITER = 310000;
+const TE = new TextEncoder(), TD = new TextDecoder();
+let DK = null;          /* chave dos dados, só existe na memória desta aba */
+let COFRE = null;       /* {v:2, usuarios:[{id,nome,papel,ativo,emb}]} */
+let PAPEL = 'admin';    /* 'admin' | 'equipe' — papel de quem está nesta aba */
+let EU = null;          /* a pessoa que entrou nesta aba */
+const ehAdmin = () => PAPEL === 'admin';
+const quemSou = () => (EU && EU.nome) || (PAPEL === 'admin' ? 'ADMINISTRADORA' : 'EQUIPE');
+const usuarios = () => (COFRE && COFRE.usuarios) || [];
+const novoIdUsuario = () => {
+  let n = 1; const usados = new Set(usuarios().map(u => u.id));
+  while (usados.has('U' + n)) n++;
+  return 'U' + n;
+};
+
+function b64(u8){ let s = ''; u8.forEach(b => s += String.fromCharCode(b)); return btoa(s); }
+function deb64(s){ const b = atob(s); const u = new Uint8Array(b.length);
+  for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+function sortear(n){ return crypto.getRandomValues(new Uint8Array(n)); }
+
+async function chaveDaSenha(senha, sal){
+  const base = await crypto.subtle.importKey('raw', TE.encode(senha), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2', salt: sal, iterations: ITER, hash:'SHA-256'},
+    base, {name:'AES-GCM', length:256}, false, ['encrypt','decrypt']);
+}
+async function novaChaveDados(){
+  return crypto.subtle.generateKey({name:'AES-GCM', length:256}, true, ['encrypt','decrypt']);
+}
+async function embrulhar(dk, senha){
+  const sal = sortear(16), iv = sortear(12);
+  const k = await chaveDaSenha(senha, sal);
+  const cru = await crypto.subtle.exportKey('raw', dk);
+  const ct = await crypto.subtle.encrypt({name:'AES-GCM', iv}, k, cru);
+  return {sal: b64(sal), iv: b64(iv), ct: b64(new Uint8Array(ct))};
+}
+async function desembrulhar(pac, senha){
+  const k = await chaveDaSenha(senha, deb64(pac.sal));
+  const cru = await crypto.subtle.decrypt({name:'AES-GCM', iv: deb64(pac.iv)}, k, deb64(pac.ct));
+  return crypto.subtle.importKey('raw', cru, {name:'AES-GCM'}, true, ['encrypt','decrypt']);
+}
+async function cifrar(dk, obj){
+  const iv = sortear(12);
+  const ct = await crypto.subtle.encrypt({name:'AES-GCM', iv}, dk, TE.encode(JSON.stringify(obj)));
+  return {iv: b64(iv), ct: b64(new Uint8Array(ct))};
+}
+async function decifrar(dk, pac){
+  const cru = await crypto.subtle.decrypt({name:'AES-GCM', iv: deb64(pac.iv)}, dk, deb64(pac.ct));
+  return JSON.parse(TD.decode(cru));
+}
+const ehCofre = d => !!(d && d.cofre && d.ct && ((d.usuarios && d.usuarios.length) || d.admin || d.equipe));
+
+/* Antes existiam duas senhas fixas; agora existe uma lista de pessoas, cada
+   uma com o seu embrulho da mesma chave. Arquivo antigo vira lista de duas
+   pessoas sem que ninguém precise trocar de senha. */
+function normalizarCofre(pac){
+  if (pac && pac.usuarios && pac.usuarios.length)
+    return {v: 2, usuarios: pac.usuarios.map(u => Object.assign({ativo: true}, u))};
+  const us = [];
+  if (pac && pac.admin)  us.push({id:'U1', nome:'ADMINISTRADORA', papel:'admin',  ativo:true, emb: pac.admin});
+  if (pac && pac.equipe) us.push({id:'U2', nome:'EQUIPE',         papel:'equipe', ativo:true, emb: pac.equipe});
+  return {v: 2, usuarios: us};
+}
+
+/* Tenta abrir o embrulho de uma pessoa — ou o de todas, quando não se sabe
+   quem é. Senha errada simplesmente não abre nenhum. */
+async function abrirCofre(pacote, senha, idUsuario){
+  const cofre = normalizarCofre(pacote);
+  const tentar = cofre.usuarios.filter(u => u.ativo !== false && (!idUsuario || u.id === idUsuario));
+  for (const u of tentar){
+    try {
+      const dk = await desembrulhar(u.emb, senha);
+      const dados = await decifrar(dk, pacote);
+      return {dk, usuario: u, papel: u.papel || 'equipe', cofre, dados};
+    } catch (e) { /* não era esta pessoa */ }
+  }
+  return null;
+}
+/* Confere se uma senha já é de outra pessoa: dentro do mesmo cofre, duas
+   senhas iguais tornam impossível saber quem entrou. */
+async function senhaJaUsada(senha, exceto){
+  for (const u of usuarios()){
+    if (u.id === exceto) continue;
+    try { await desembrulhar(u.emb, senha); return u; } catch (e) { /* segue */ }
+  }
+  return null;
+}
+/* O que vai gravado: a lista de pessoas em claro (nome e papel, nunca a
+   senha) e o conteúdo cifrado. As chaves antigas continuam sendo escritas
+   para que uma versão anterior do sistema ainda consiga abrir o arquivo. */
+function cabecalhoCofre(){
+  const us = usuarios();
+  const pri = p => (us.find(u => (u.papel || 'equipe') === p && u.ativo !== false) || {}).emb;
+  const h = {cofre: 1, v: 2, app: VERSAO_APP, usuarios: us};
+  const a = pri('admin'), e = pri('equipe');
+  if (a) h.admin = a;
+  if (e) h.equipe = e;
+  return h;
+}
+/* O arquivo que vai para o disco: embrulhos em claro, conteúdo cifrado. */
+async function cargaParaSalvar(){
+  if (!DK || !COFRE) return JSON.stringify(Object.assign({app: VERSAO_APP}, S));
+  const c = await cifrar(DK, S);
+  return JSON.stringify(Object.assign(cabecalhoCofre(), {iv: c.iv, ct: c.ct}));
+}
+
+/* ---------------- tela de entrada ---------------- */
+let pacotePendente = null;
+/* Enquanto trancado, nenhuma tela do sistema é desenhada — nem por engano,
+   nem por um render() disparado de dentro de um modal de configuração. */
+let TRANCADO = false;
+
+/* Portão de quem chega num computador que ainda não conhece a base.
+   Sem repositório e sem token não há o que abrir, então o único caminho
+   oferecido é ligar este navegador ao repositório. */
+function telaPortao(aviso){
+  TRANCADO = true;
+  document.querySelector('.topbar').hidden = true;
+  document.getElementById('tabs').hidden = true;
+  document.querySelector('main').hidden = true;
+  const el = document.getElementById('cadeado');
+  el.hidden = false;
+  el.innerHTML = `<div class="cad-box">
+    <div class="eyebrow">Recrutamento &amp; Seleção · Grupo Fagron</div>
+    <h1>Controle de Vagas, SLA e Experiência</h1>
+    <p>Este computador ainda não está ligado à base. Os dados ficam num repositório
+       privado, e cada pessoa usa a própria chave de acesso para alcançá-lo.</p>
+    <form id="cad-form" autocomplete="off">
+      <button class="danger" type="submit" id="cad-ligar">Ligar este computador</button>
+    </form>
+    <div class="cad-erro" id="cad-erro">${aviso ? esc(aviso) : ''}</div>
+  </div>`;
+  document.getElementById('cad-form').addEventListener('submit', ev => {
+    ev.preventDefault();
+    telaSinc();
+  });
+}
+/* Depois de configurar repositório e token, busca o cofre e passa a bola
+   para a tela de senha. Chamado pela própria tela de sincronização. */
+async function portaoTentar(quieto){
+  const er = document.getElementById('cad-erro');
+  if (er) er.textContent = 'Buscando a base…';
+  const falhou = msg => { if (!quieto) telaPortao(msg); return false; };
+  try {
+    const r = await baixarDoGit();
+    if (r.vazio) return falhou('O repositório está ligado, mas ainda não tem nada gravado. Peça para a administradora salvar uma vez.');
+    const pac = JSON.parse(r.texto);
+    if (!ehCofre(pac)) return falhou('O arquivo do repositório não está protegido por senha. Peça para a administradora definir as senhas e salvar.');
+    shaRemoto = r.sha;
+    document.getElementById('cadeado').innerHTML = '';
+    pedirSenha(pac);
+    return true;
+  } catch (e){
+    return falhou('Não deu para buscar: ' + (erroDeRede(e) || e.message || e));
+  }
+}
+
+function pedirSenha(pacote, aviso){
+  TRANCADO = true;
+  pacotePendente = pacote;
+  const listaEntrada = normalizarCofre(pacote).usuarios
+    .filter(u => u.ativo !== false)
+    .sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
+  document.querySelector('.topbar').hidden = true;
+  document.getElementById('tabs').hidden = true;
+  document.querySelector('main').hidden = true;
+  const el = document.getElementById('cadeado');
+  el.hidden = false;
+  el.innerHTML = `<div class="cad-box">
+    <div class="eyebrow">Recrutamento &amp; Seleção · Grupo Fagron</div>
+    <h1>Controle de Vagas, SLA e Experiência</h1>
+    <p>Este sistema está protegido por senha. O conteúdo fica gravado cifrado —
+       sem a senha não há como lê-lo, nem pelo código da página.</p>
+    <form id="cad-form" autocomplete="off">
+      ${listaEntrada.length > 1 ? `<select id="cad-quem" aria-label="Quem é você">
+        ${[['admin','Administradora'], ['equipe','Equipe']].map(([p, rotulo]) => {
+          const g = listaEntrada.filter(u => (u.papel || 'equipe') === p);
+          return g.length ? `<optgroup label="${rotulo}">${
+            g.map(u => `<option value="${esc(u.id)}">${esc(u.nome)}</option>`).join('')}</optgroup>` : '';
+        }).join('')}
+      </select>` : ''}
+      <input type="password" id="cad-senha" placeholder="Senha" autocomplete="current-password" autofocus>
+      <button class="danger" type="submit" id="cad-ok">Entrar</button>
+    </form>
+    <div class="cad-erro" id="cad-erro">${aviso ? esc(aviso) : ''}</div>
+  </div>`;
+  const f = document.getElementById('cad-form');
+  f.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const s = document.getElementById('cad-senha').value;
+    const sel = document.getElementById('cad-quem');
+    const quem = sel ? sel.value : null;
+    const btn = document.getElementById('cad-ok'), er = document.getElementById('cad-erro');
+    if (!s) return;
+    btn.disabled = true; btn.textContent = 'Conferindo…'; er.textContent = '';
+    /* tenta primeiro a pessoa escolhida; se ela errou o nome mas a senha é de
+       outra pessoa da lista, entra assim mesmo em vez de dizer "senha errada" */
+    const r = (quem && await abrirCofre(pacotePendente, s, quem)) || await abrirCofre(pacotePendente, s);
+    if (!r){
+      btn.disabled = false; btn.textContent = 'Entrar';
+      er.textContent = 'Senha incorreta.';
+      const c = document.getElementById('cad-senha'); c.value = ''; c.focus();
+      return;
+    }
+    DK = r.dk; PAPEL = r.papel; EU = r.usuario;
+    COFRE = r.cofre;
+    pacotePendente = null;
+    TRANCADO = false;
+    /* o arquivo do repositório vem embrulhado com o ponto de partida junto */
+    if (r.dados && r.dados.pacote){ BASE = null; r.dados = r.dados.estado; }
+    /* trabalho que ficou no navegador desta pessoa volta como está */
+    const loc = lerLocal();
+    if (loc && loc.carga){
+      try {
+        const pac = JSON.parse(loc.carga);
+        const dentro = ehCofre(pac) ? await decifrar(r.dk, pac) : pac;
+        if (dentro && dentro.pacote){
+          r.dados = dentro.estado; BASE = dentro.base;   /* mantém o ponto de partida original */
+          soLocal = true; temCopiaLocal = true;
+        }
+      } catch (e) { /* cópia local de outra senha: ignora */ }
+    }
+    el.hidden = true; el.innerHTML = '';
+    document.querySelector('.topbar').hidden = false;
+    document.getElementById('tabs').hidden = false;
+    document.querySelector('main').hidden = false;
+    arrancar(r.dados);
+  });
+  document.getElementById('cad-senha').focus();
+}
+
+/* ---------------- criar, trocar e remover a senha ---------------- */
+function telaSenhas(){
+  const tem = !!COFRE;
+  const el = document.getElementById('modal');
+  el.innerHTML = `<div class="modal-box cvbox" role="dialog" aria-modal="true">
+    <h3>${tem ? 'Trocar as senhas' : 'Proteger o sistema com senha'}</h3>
+    <div class="cvcorpo">
+      <div class="hint">São duas senhas, com poderes diferentes. Quem entra com a
+        <b>senha de administradora</b> faz tudo: lança, exporta, troca as senhas e zera o sistema.
+        Quem entra com a <b>senha da equipe</b> lança e consulta, mas não exporta nem mexe na senha.</div>
+      <label class="cvlab">Senha de administradora <span class="opc">só sua</span></label>
+      <input type="password" id="sn-a1" autocomplete="new-password">
+      <label class="cvlab">Repita a senha de administradora</label>
+      <input type="password" id="sn-a2" autocomplete="new-password">
+      <label class="cvlab">Senha da equipe</label>
+      <input type="password" id="sn-e1" autocomplete="new-password">
+      <label class="cvlab">Repita a senha da equipe</label>
+      <input type="password" id="sn-e2" autocomplete="new-password">
+      <div class="cverro" id="sn-erro" hidden></div>
+      <div class="hint" style="margin-top:14px"><b>Anote as senhas em lugar seguro antes de confirmar.</b>
+        Não existe recuperação: perdeu a senha, perdeu o acesso ao que estiver gravado.
+        Use frases longas, não palavras soltas. Depois de confirmar, clique em <b>Salvar</b>
+        para a proteção valer para quem abrir o link.</div>
+    </div>
+    <div class="modal-acts">
+      <button data-conf="0">Cancelar</button>
+      ${tem ? '<button class="sm" id="sn-remover">Remover a proteção</button>' : ''}
+      <button class="danger" id="sn-ok">${tem ? 'Trocar as senhas' : 'Proteger'}</button>
+    </div></div>`;
+  el.hidden = false;
+  document.getElementById('sn-a1').focus();
+}
+async function aplicarSenhas(){
+  const g = id => document.getElementById(id).value;
+  const er = document.getElementById('sn-erro');
+  const mostrar = t => { er.hidden = false; er.innerHTML = t; };
+  const a1 = g('sn-a1'), a2 = g('sn-a2'), e1 = g('sn-e1'), e2 = g('sn-e2');
+  if (a1.length < 8 || e1.length < 8) return mostrar('Cada senha precisa de pelo menos <b>8 caracteres</b>.');
+  if (a1 !== a2) return mostrar('As duas digitações da senha de administradora não batem.');
+  if (e1 !== e2) return mostrar('As duas digitações da senha da equipe não batem.');
+  if (a1 === e1) return mostrar('As duas senhas precisam ser <b>diferentes</b> — senão não há como separar os papéis.');
+  const btn = document.getElementById('sn-ok');
+  btn.disabled = true; btn.textContent = 'Cifrando…';
+  try {
+    if (!DK) DK = await novaChaveDados();
+    COFRE = {v: 2, usuarios: [
+      {id:'U1', nome:'ADMINISTRADORA', papel:'admin',  ativo:true, emb: await embrulhar(DK, a1)},
+      {id:'U2', nome:'EQUIPE',         papel:'equipe', ativo:true, emb: await embrulhar(DK, e1)},
+    ]};
+    PAPEL = 'admin'; EU = COFRE.usuarios[0];
+    fecharModal(0);
+    marcarSujo(); render();
+    toast('Senhas definidas — clique em Salvar para valer no link');
+  } catch (e){
+    btn.disabled = false; btn.textContent = 'Proteger';
+    mostrar('Não deu para cifrar: ' + esc(e.message || String(e)));
+  }
+}
+function removerProtecao(){
+  /* Na versão publicada não existe volta: sem cofre no arquivo, a página fica
+     sem nada para conferir e ninguém mais entra. */
+  try {
+    if (JSON.parse(document.getElementById('semente').textContent).trancado){
+      toast('Nesta versão publicada a senha não pode ser removida — sem ela ninguém consegue entrar. Para tirar alguém, use Pessoas com acesso.');
+      return;
+    }
+  } catch (e) { /* sem semente: segue */ }
+  confirmar('Remover a proteção por senha?',
+    'O sistema volta a gravar os dados em texto aberto. Quem tiver o link vê tudo sem senha.',
+    'Remover').then(ok => {
+      if (!ok) return;
+      DK = null; COFRE = null; PAPEL = 'admin'; EU = null;
+      marcarSujo(); render();
+      toast('Proteção removida — clique em Salvar para valer no link');
+    });
+}
+
+/* ---------------- pessoas com acesso ----------------
+   Cada pessoa tem a própria senha, que embrulha a mesma chave dos dados.
+   Adicionar alguém é criar mais um embrulho; tirar alguém é apagar o dela.
+   Só quem já está dentro consegue fazer isso, porque só quem está dentro
+   tem a chave na memória. */
+function telaUsuarios(){
+  const us = usuarios().slice().sort((a,b) => String(a.nome).localeCompare(String(b.nome),'pt-BR'));
+  const admins = us.filter(u => (u.papel||'equipe') === 'admin' && u.ativo !== false).length;
+  const eu = EU ? EU.id : null;
+  const el = document.getElementById('modal');
+  el.innerHTML = `<div class="modal-box cvbox" role="dialog" aria-modal="true">
+    <h3>Pessoas com acesso</h3>
+    <div class="cvcorpo">
+      <div class="hint">Cada pessoa entra com a <b>própria senha</b>. Tirar alguém daqui não
+        mexe na senha das outras. <b>Administradora</b> faz tudo; <b>equipe</b> lança e consulta,
+        sem exportar e sem mexer nesta tela.</div>
+
+      <table class="rep" style="margin-top:14px"><thead><tr>
+        <th>Nome</th><th>Perfil</th><th>Situação</th>${ehAdmin() ? '<th></th>' : ''}
+      </tr></thead><tbody>
+      ${us.map(u => {
+        const meu = u.id === eu;
+        const soAdmin = (u.papel||'equipe') === 'admin' && admins <= 1;
+        return `<tr>
+          <td>${ehAdmin()
+            ? `<input data-us-nome="${esc(u.id)}" value="${esc(u.nome)}" style="width:100%">`
+            : esc(u.nome)}${meu ? ' <span class="opc">(você)</span>' : ''}</td>
+          <td>${ehAdmin() && !soAdmin
+            ? `<select data-us-papel="${esc(u.id)}">
+                 <option value="admin"${(u.papel||'equipe')==='admin'?' selected':''}>Administradora</option>
+                 <option value="equipe"${(u.papel||'equipe')==='equipe'?' selected':''}>Equipe</option>
+               </select>`
+            : ((u.papel||'equipe') === 'admin' ? 'Administradora' : 'Equipe')}</td>
+          <td>${ehAdmin() && !meu && !soAdmin
+            ? `<label class="chk"><input type="checkbox" data-us-ativo="${esc(u.id)}"${u.ativo !== false ? ' checked' : ''}> ativa</label>`
+            : (u.ativo !== false ? 'ativa' : 'suspensa')}</td>
+          ${ehAdmin() ? `<td>${meu || soAdmin ? '' :
+            `<button class="lx" data-us-rm="${esc(u.id)}" title="Tirar do sistema">✕</button>`}</td>` : ''}
+        </tr>`;
+      }).join('')}
+      </tbody></table>
+
+      ${!ehAdmin() ? '' : `
+      <h4 style="margin:22px 0 8px">Adicionar pessoa</h4>
+      <div class="hint">Você escolhe a senha inicial e passa para ela. Ela troca depois, aqui mesmo.</div>
+      <label class="cvlab">Nome</label>
+      <input id="us-nome" autocomplete="off" placeholder="NOME DA PESSOA">
+      <label class="cvlab">Perfil</label>
+      <select id="us-papel"><option value="equipe">Equipe</option><option value="admin">Administradora</option></select>
+      <label class="cvlab">Senha inicial</label>
+      <input type="password" id="us-s1" autocomplete="new-password">
+      <label class="cvlab">Repita a senha inicial</label>
+      <input type="password" id="us-s2" autocomplete="new-password">
+      <div class="modal-acts" style="justify-content:flex-start;padding:10px 0 0;border:0">
+        <button class="sm" id="us-add">Adicionar</button></div>`}
+
+      <h4 style="margin:22px 0 8px">Trocar senha</h4>
+      ${ehAdmin() ? `<label class="cvlab">De quem</label>
+      <select id="us-quem">${us.filter(u => u.ativo !== false).map(u =>
+        `<option value="${esc(u.id)}"${u.id===eu?' selected':''}>${esc(u.nome)}${u.id===eu?' (você)':''}</option>`).join('')}</select>`
+      : `<div class="hint">Trocando a <b>sua</b> senha.</div>`}
+      <label class="cvlab">Senha nova</label>
+      <input type="password" id="us-n1" autocomplete="new-password">
+      <label class="cvlab">Repita a senha nova</label>
+      <input type="password" id="us-n2" autocomplete="new-password">
+      <div class="modal-acts" style="justify-content:flex-start;padding:10px 0 0;border:0">
+        <button class="sm" id="us-trocar">Trocar senha</button></div>
+
+      <div class="cverro" id="us-erro" hidden></div>
+      <div class="hint" style="margin-top:16px"><b>Não existe recuperação de senha.</b> Se alguém
+        esquecer a dela, você define uma nova aqui. Depois de qualquer mudança nesta tela,
+        clique em <b>Salvar</b> para valer para as outras pessoas.</div>
+    </div>
+    <div class="modal-acts"><button data-conf="0">Fechar</button></div></div>`;
+  el.hidden = false;
+}
+function erroUsuarios(t){
+  const er = document.getElementById('us-erro');
+  if (!er) return;
+  er.hidden = false; er.innerHTML = t;
+}
+async function adicionarUsuario(){
+  if (!ehAdmin() || !DK) return;
+  const g = id => (document.getElementById(id) || {}).value || '';
+  const nome = caixaAlta(g('us-nome').trim()), papel = g('us-papel'), s1 = g('us-s1'), s2 = g('us-s2');
+  if (!nome) return erroUsuarios('Ponha o nome da pessoa.');
+  if (usuarios().some(u => String(u.nome).toUpperCase() === nome)) return erroUsuarios('Já existe alguém com esse nome.');
+  if (s1.length < 8) return erroUsuarios('A senha precisa de pelo menos <b>8 caracteres</b>.');
+  if (s1 !== s2) return erroUsuarios('As duas digitações não batem.');
+  const btn = document.getElementById('us-add');
+  btn.disabled = true; btn.textContent = 'Criando…';
+  try {
+    const igual = await senhaJaUsada(s1);
+    if (igual){ btn.disabled = false; btn.textContent = 'Adicionar';
+      return erroUsuarios('Essa senha já é de <b>' + esc(igual.nome) + '</b>. Duas pessoas com a mesma senha ficam indistinguíveis — escolha outra.'); }
+    const idNovo = novoIdUsuario();
+    COFRE.usuarios.push({id: idNovo, nome, papel, ativo: true, emb: await embrulhar(DK, s1)});
+    usuariosMexidos.add(idNovo);
+    marcarSujo(); telaUsuarios(); render();
+    toast(nome + ' entrou — clique em Salvar para valer para as outras');
+  } catch (e){
+    btn.disabled = false; btn.textContent = 'Adicionar';
+    erroUsuarios('Não deu para criar: ' + esc(e.message || String(e)));
+  }
+}
+async function trocarSenhaUsuario(){
+  if (!DK) return;
+  const g = id => (document.getElementById(id) || {}).value || '';
+  const alvo = ehAdmin() ? g('us-quem') : (EU && EU.id);
+  const u = usuarios().find(x => x.id === alvo);
+  if (!u) return erroUsuarios('Não achei essa pessoa.');
+  const n1 = g('us-n1'), n2 = g('us-n2');
+  if (n1.length < 8) return erroUsuarios('A senha precisa de pelo menos <b>8 caracteres</b>.');
+  if (n1 !== n2) return erroUsuarios('As duas digitações não batem.');
+  const btn = document.getElementById('us-trocar');
+  btn.disabled = true; btn.textContent = 'Trocando…';
+  try {
+    const igual = await senhaJaUsada(n1, u.id);
+    if (igual){ btn.disabled = false; btn.textContent = 'Trocar senha';
+      return erroUsuarios('Essa senha já é de <b>' + esc(igual.nome) + '</b>. Escolha outra.'); }
+    u.emb = await embrulhar(DK, n1);
+    usuariosMexidos.add(u.id);
+    marcarSujo(); telaUsuarios(); render();
+    toast('Senha de ' + u.nome + ' trocada — clique em Salvar');
+  } catch (e){
+    btn.disabled = false; btn.textContent = 'Trocar senha';
+    erroUsuarios('Não deu para trocar: ' + esc(e.message || String(e)));
+  }
+}
+function removerUsuario(id){
+  const u = usuarios().find(x => x.id === id);
+  if (!u || !ehAdmin()) return;
+  confirmar('Tirar ' + u.nome + ' do sistema?',
+    'A senha dela deixa de abrir o sistema a partir do próximo Salvar. As outras senhas continuam valendo. '
+    + 'Se ela também não deve mais alcançar o repositório, tire o acesso dela no GitHub — é lá que os dados moram.',
+    'Tirar').then(ok => {
+      if (!ok) return;
+      COFRE.usuarios = COFRE.usuarios.filter(x => x.id !== id);
+      usuariosMexidos.add(id);
+      marcarSujo(); telaUsuarios(); render();
+      toast(u.nome + ' saiu — clique em Salvar para valer');
+    });
+}
+
+/* ---------------- exportação (substitui o download de arquivo) ----------------
+   Sem a capacidade de download o artefato pode ser publicado por link; em troca
+   o CSV é entregue na tela, para copiar e colar na planilha. Só a administradora. */
+function exportarCSV(){
+  if (!ehAdmin()){ toast('Exportação disponível apenas para a administradora'); return; }
+  const [aba, linhas] = tabelaCSV();
+  const texto = csv(linhas);
+  const el = document.getElementById('modal');
+  el.innerHTML = `<div class="modal-box cvbox" role="dialog" aria-modal="true">
+    <h3>CSV da aba ${esc(aba)}</h3>
+    <div class="cvcorpo">
+      <div class="hint">${linhas.length - 1} linha(s). Clique em <b>Copiar tudo</b> e cole numa planilha em branco —
+        o separador é ponto e vírgula, que é o padrão do Excel em português.</div>
+      <textarea id="ex-txt" rows="12" spellcheck="false">${esc(texto)}</textarea>
+    </div>
+    <div class="modal-acts"><button data-conf="0">Fechar</button>
+      <button class="danger" id="ex-copiar">Copiar tudo</button></div></div>`;
+  el.hidden = false;
+  document.getElementById('ex-txt').focus();
+}
+async function copiarCSV(){
+  const t = document.getElementById('ex-txt');
+  t.focus(); t.select();
+  let ok = false;
+  try { await navigator.clipboard.writeText(t.value); ok = true; }
+  catch (e) { try { ok = document.execCommand('copy'); } catch (e2) { ok = false; } }
+  toast(ok ? 'CSV copiado — cole na planilha' : 'Não consegui copiar; o texto já está selecionado, use Ctrl+C');
+}
+
+
+/* ============================================================ PASSAR O BASTÃO
+   Quem abre por link compartilhado entra como leitura: a plataforma não deixa
+   ninguém além da dona gravar na cópia de todos. Então quem trabalha pelo link
+   grava no próprio navegador e, quando termina, gera um PACOTE — o mesmo
+   conteúdo cifrado com a chave do cofre, em texto, que viaja por e-mail ou
+   WhatsApp sem expor nada. A dona cola o pacote, confere o que mudou e
+   incorpora. Nada é apagado na incorporação: só entra e atualiza. */
+
+const CHAVE_LOCAL = 'fagron-rs-local';
+/* Assinatura de cada registro no momento em que a pessoa abriu o sistema.
+   É o que permite saber, na hora de incorporar, se ela mexeu naquele registro
+   ou se está só devolvendo a versão antiga — sem isso o pacote apagaria o que
+   a administradora fez enquanto isso. */
+let BASE = null;
+/* Os parâmetros e a lista de pessoas não são registros: não entram no cotejo
+   por id. Sem um ponto de partida próprio, quem estivesse com o sistema aberto
+   regravava a configuração antiga por cima — inclusive apagando gente que a
+   administradora tinha acabado de cadastrar. */
+let BASE_PARAMS = null;
+let usuariosMexidos = new Set();
+function marcarPartida(){
+  BASE = assinarTudo(S);
+  BASE_PARAMS = JSON.parse(JSON.stringify(S.params || {}));
+  usuariosMexidos = new Set();
+}
+/* A assinatura ignora os campos de autoria (começam com _). Sem isso, carimbar
+   quem mexeu já contaria como "mexeu de novo" e o cotejo nunca estabilizaria. */
+function semAutoria(o){
+  const c = {};
+  Object.keys(o).forEach(k => { if (k.charAt(0) !== '_') c[k] = o[k]; });
+  return c;
+}
+function assinar(o){
+  const t = JSON.stringify(semAutoria(o));
+  let h = 0x811c9dc5;
+  for (let i = 0; i < t.length; i++){ h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(36);
+}
+function assinarTudo(est){
+  const m = {};
+  COLECOES.forEach(col => { m[col] = {}; (est[col] || []).forEach(r => { m[col][r.id] = assinar(r); }); });
+  return m;
+}
+/* Um único ponto marca a autoria: pouco antes de gravar, o que estiver
+   diferente do ponto de partida ganha o nome de quem está nesta aba. Assim
+   nenhum caminho de edição precisa lembrar de carimbar — inclusive os
+   lançamentos automáticos e as edições em lote. */
+function carimbarAutoria(){
+  if (!COFRE) return;
+  const agora = new Date().toISOString();
+  const quem = quemSou();
+  COLECOES.forEach(col => {
+    const antes = (BASE && BASE[col]) || {};
+    (S[col] || []).forEach(r => {
+      const a = antes[r.id];
+      if (a === undefined || a !== assinar(r)){ r._por = quem; r._em = agora; }
+    });
+  });
+}
+function autoriaTexto(r){
+  if (!r || !r._por) return '';
+  let q = '';
+  if (r._em){
+    const d = new Date(r._em);
+    if (!isNaN(d)) q = ' · ' + String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0')
+      + '/' + d.getFullYear() + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+  }
+  return 'Última alteração: ' + r._por + q;
+}
+const autoriaAttr = r => { const t = autoriaTexto(r); return t ? ` title="${esc(t)}"` : ''; };
+
+let soLocal = false;        /* esta aba não consegue gravar na cópia de todos */
+let temCopiaLocal = false;
+
+function guardarLocal(carga){
+  try { localStorage.setItem(CHAVE_LOCAL, JSON.stringify({ts: Date.now(), carga})); temCopiaLocal = true; return true; }
+  catch (e) { return false; }
+}
+function lerLocal(){
+  try { const b = localStorage.getItem(CHAVE_LOCAL); return b ? JSON.parse(b) : null; }
+  catch (e) { return null; }
+}
+function apagarLocal(){
+  try { localStorage.removeItem(CHAVE_LOCAL); } catch (e) { /* navegador sem storage */ }
+  temCopiaLocal = false;
+}
+
+/* ---- o pacote ---- */
+async function embrulharPacote(){
+  const conteudo = {pacote: 1, app: VERSAO_APP, estado: S, base: BASE};
+  if (!DK || !COFRE) return JSON.stringify(conteudo);
+  const c = await cifrar(DK, conteudo);
+  return JSON.stringify(Object.assign(cabecalhoCofre(), {iv: c.iv, ct: c.ct}));
+}
+async function gerarPacote(backup){
+  const carga = await embrulharPacote();
+  const texto = '----- PACOTE R&S FAGRON -----\n' +
+    btoa(unescape(encodeURIComponent(carga))).replace(/(.{76})/g, '$1\n') +
+    '\n----- FIM DO PACOTE -----';
+  const el = document.getElementById('modal');
+  el.innerHTML = `<div class="modal-box cvbox" role="dialog" aria-modal="true">
+    <h3>${backup ? 'Cópia de segurança' : 'Pacote de alterações'}</h3>
+    <div class="cvcorpo">
+      <div class="hint">${backup
+        ? `Este bloco é o sistema inteiro, <b>cifrado</b> com a sua senha. Guarde num arquivo de texto
+           datado. Se um dia algo se perder, cole em <b>Parâmetros → Receber pacote</b> e tudo volta.
+           Sem a senha ninguém lê o conteúdo, então dá para guardar em qualquer lugar.`
+        : `Copie tudo abaixo e mande para a administradora por e-mail ou WhatsApp.
+           O conteúdo vai <b>cifrado</b> — quem interceptar não lê nada sem a senha do sistema.
+           Ela cola em <b>Parâmetros → Receber pacote</b> e incorpora.`}</div>
+      <textarea id="pk-txt" rows="10" spellcheck="false">${esc(texto)}</textarea>
+      <div class="hint">${(texto.length/1024).toFixed(0)} KB de texto. Se o campo de mensagem cortar,
+        mande como arquivo .txt ou divida em duas mensagens — ele precisa chegar inteiro.</div>
+    </div>
+    <div class="modal-acts"><button data-conf="0">Fechar</button>
+      <button class="danger" id="pk-copiar">Copiar tudo</button></div></div>`;
+  el.hidden = false;
+  document.getElementById('pk-txt').focus();
+}
+async function copiarPacote(){
+  const t = document.getElementById('pk-txt');
+  t.focus(); t.select();
+  let ok = false;
+  try { await navigator.clipboard.writeText(t.value); ok = true; }
+  catch (e) { try { ok = document.execCommand('copy'); } catch (e2) { ok = false; } }
+  toast(ok ? 'Pacote copiado' : 'Não consegui copiar; o texto está selecionado, use Ctrl+C');
+}
+
+/* ---- receber ---- */
+function telaReceber(){
+  const el = document.getElementById('modal');
+  el.innerHTML = `<div class="modal-box cvbox" role="dialog" aria-modal="true">
+    <h3>Receber pacote de alterações</h3>
+    <div class="cvcorpo">
+      <div class="hint">Cole abaixo o pacote que a pessoa te mandou. Eu abro, comparo com o que
+        está no sistema e mostro exatamente o que vai entrar antes de aplicar.
+        <b>Nada é apagado</b>: só entram registros novos e atualizam os que ela mexeu.</div>
+      <textarea id="rc-txt" rows="8" spellcheck="false" placeholder="----- PACOTE R&amp;S FAGRON -----"></textarea>
+      <div id="rc-saida"></div>
+    </div>
+    <div class="modal-acts"><button data-conf="0">Cancelar</button>
+      <button class="danger" id="rc-ler">Conferir o pacote</button></div></div>`;
+  el.hidden = false;
+  document.getElementById('rc-txt').focus();
+}
+let pacoteLido = null;
+async function lerPacote(){
+  const saida = document.getElementById('rc-saida');
+  const bruto = (document.getElementById('rc-txt').value || '')
+    .replace(/-{3,}[^\n]*-{3,}/g, '').replace(/\s+/g, '');
+  if (!bruto){ saida.innerHTML = `<div class="cverro">Cole o pacote primeiro.</div>`; return; }
+  let dentro = null;
+  try {
+    const pac = JSON.parse(decodeURIComponent(escape(atob(bruto))));
+    dentro = ehCofre(pac) ? await decifrar(DK, pac) : pac;
+  } catch (e) {
+    saida.innerHTML = `<div class="cverro"><b>Não consegui abrir este pacote.</b>
+      Ou ele chegou cortado, ou foi gerado com outra senha. Peça para reenviar inteiro.</div>`;
+    return;
+  }
+  const estado = dentro && dentro.pacote ? dentro.estado : dentro;
+  const base = dentro && dentro.pacote ? dentro.base : null;
+  const d = compararPacote(estado, base);
+  pacoteLido = d;
+  if (!d.total && !d.conflitos.length){
+    saida.innerHTML = `<div class="cvresumo">O pacote não traz nada diferente do que já está aqui.</div>`;
+    return;
+  }
+  saida.innerHTML = `
+    ${!base ? `<div class="cverro">Este pacote é de uma versão antiga e não diz de onde partiu.
+      Confira item por item: pode sobrescrever algo que você fez depois.</div>` : ''}
+    <div class="cvresumo">
+      ${d.total ? `<b>${d.total}</b> alteração(ões) entram direto:<ul class="rclista">${d.linhas.map(l => `<li>${l}</li>`).join('')}</ul>`
+                : 'Nada entra direto.'}
+      ${d.conflitos.length ? `<div class="cvfalta" style="margin-top:10px">
+          <b>${d.conflitos.length} registro(s) foram mexidos dos dois lados.</b>
+          Por padrão eu <b>mantenho a sua versão</b>. Marque os que devem ficar com a versão do pacote:</div>
+        <ul class="rclista rcconf">${d.conflitos.map((c,i) => `<li>
+          <label><input type="checkbox" data-cf="${i}"> ${rotuloDe(c.col, c.pkg || c.aqui)}
+          <span class="opc">— ${c.apagar
+            ? 'a outra pessoa <b>apagou</b>; aqui está alterado: ' + esc(resumoReg(c.aqui)) + '. Marque para apagar também'
+            : 'aqui: ' + esc(resumoReg(c.aqui)) + ' · no pacote: ' + esc(resumoReg(c.pkg))}</span></label></li>`).join('')}</ul>`
+        : ''}
+      ${d.somem.length ? `<div class="cvfalta" style="margin-top:10px">${d.somem.length} registro(s) existem aqui e não vêm no pacote.
+        <b>Ficam como estão</b> — incorporar nunca apaga nada.</div>` : ''}
+    </div>`;
+  document.querySelector('#modal .modal-acts').innerHTML =
+    `<button data-conf="0">Cancelar</button><button class="danger" id="rc-aplicar">Incorporar</button>`;
+}
+function rotuloDe(col, r){
+  return esc(r.nome || r.cargo || r.id || '—') + ' <span class="opc">' + esc(r.id || '') + '</span>';
+}
+/* três ou quatro campos preenchidos, só para ela reconhecer a diferença */
+function resumoReg(r){
+  return Object.keys(r).filter(k => !['id','idVaga','itens','etapas'].includes(k))
+    .map(k => r[k]).filter(v => v !== null && v !== '' && typeof v !== 'object')
+    .slice(0, 4).join(' · ') || '(vazio)';
+}
+/* Compara o pacote com o que está aqui, usando a assinatura de partida para
+   separar "ela mexeu" de "ela só devolveu o que já existia". */
+function compararPacote(estado, base){
+  const linhas = [], somem = [], conflitos = [];
+  let total = 0;
+  const plano = {};
+  COLECOES.forEach(col => {
+    const aqui = new Map((S[col] || []).map(r => [r.id, r]));
+    const partida = (base && base[col]) || null;
+    const novos = [], mudados = [];
+    (estado[col] || []).forEach(r => {
+      const atual = aqui.get(r.id);
+      const hPkg = assinar(r);
+      if (!atual){ novos.push(r); return; }
+      const hAqui = assinar(atual);
+      if (hAqui === hPkg) return;                       /* iguais: nada a fazer */
+      const h0 = partida ? partida[r.id] : undefined;
+      const elaMexeu = h0 === undefined ? true : hPkg !== h0;
+      const euMexi   = h0 === undefined ? true : hAqui !== h0;
+      if (!elaMexeu) return;                            /* só devolveu a versão antiga */
+      if (euMexi) conflitos.push({col, pkg: r, aqui: atual});
+      else mudados.push(r);
+    });
+    /* Exclusão: o registro estava no ponto de partida de quem enviou e não veio
+       no estado dela. Sem esta comparação, apagar não atravessa — quem apagou
+       vê sumir, e na primeira gravação da outra pessoa o registro ressuscita. */
+    const ids = new Set((estado[col] || []).map(r => r.id));
+    const apagados = [];
+    if (partida){
+      Object.keys(partida).forEach(id => {
+        if (ids.has(id)) return;                       /* continua lá */
+        const meu = aqui.get(id);
+        if (!meu) return;                              /* aqui também já não existe */
+        if (assinar(meu) !== partida[id]) conflitos.push({col, pkg: null, aqui: meu, apagar: true});
+        else apagados.push(meu);
+      });
+    }
+    (S[col] || []).forEach(r => {
+      if (ids.has(r.id)) return;
+      if (partida && partida[r.id] !== undefined) return;   /* já contado como exclusão */
+      somem.push(r);
+    });
+    plano[col] = {novos, mudados, apagados};
+    total += novos.length + mudados.length + apagados.length;
+    if (apagados.length) linhas.push(`<b>${apagados.length}</b> em ${col}: ${apagados.slice(0,4).map(r => rotuloDe(col, r)).join(', ')}${apagados.length>4?' e mais…':''} <span class="opc">apagados pela outra pessoa</span>`);
+    if (novos.length) linhas.push(`<b>${novos.length}</b> em ${col}: ${novos.slice(0,4).map(r => rotuloDe(col, r)).join(', ')}${novos.length>4?' e mais…':''} <span class="opc">novos</span>`);
+    if (mudados.length) linhas.push(`<b>${mudados.length}</b> em ${col}: ${mudados.slice(0,4).map(r => rotuloDe(col, r)).join(', ')}${mudados.length>4?' e mais…':''} <span class="opc">alterados</span>`);
+  });
+  const listasNovas = [];
+  Object.keys(estado.listas || {}).forEach(k => {
+    const jaTem = new Set(S.listas[k] || []);
+    (estado.listas[k] || []).forEach(v => { if (!jaTem.has(v)) listasNovas.push([k, v]); });
+  });
+  if (listasNovas.length){
+    total += listasNovas.length;
+    linhas.push(`<b>${listasNovas.length}</b> item(ns) novos na Base: ${listasNovas.slice(0,5).map(([k,v]) => esc(v)).join(', ')}${listasNovas.length>5?' e mais…':''}`);
+  }
+  return {total, linhas, somem, plano, listasNovas, conflitos};
+}
+function aplicarPacote(){
+  if (!pacoteLido) return;
+  const d = pacoteLido;
+  const escolhidos = [...document.querySelectorAll('#rc-saida [data-cf]:checked')].map(c => d.conflitos[+c.dataset.cf]);
+  COLECOES.forEach(col => {
+    const p = d.plano[col];
+    if (!p) return;
+    const pos = new Map((S[col] || []).map((r, i) => [r.id, i]));
+    p.mudados.forEach(r => { S[col][pos.get(r.id)] = r; });
+    if (p.apagados && p.apagados.length){
+      const fora = new Set(p.apagados.map(r => r.id));
+      S[col] = S[col].filter(r => !fora.has(r.id));
+    }
+    p.novos.forEach(r => S[col].unshift(r));
+  });
+  (S.vagas || []).forEach(ajustarEtapasVaga);
+  escolhidos.forEach(c => {
+    if (c.apagar){ S[c.col] = S[c.col].filter(r => r.id !== c.aqui.id); return; }
+    const i = S[c.col].findIndex(r => r.id === c.pkg.id);
+    if (i >= 0) S[c.col][i] = c.pkg;
+  });
+  d.listasNovas.forEach(([k, v]) => {
+    if (!Array.isArray(S.listas[k])) S.listas[k] = [];
+    if (!S.listas[k].includes(v)) S.listas[k].push(v);
+  });
+  delete S._feriados;
+  const n = d.total + escolhidos.length;
+  pacoteLido = null;
+  fecharModal(0);
+  marcarSujo(); render();
+  toast(n + ' alteração(ões) incorporada(s) — clique em Salvar');
+}
+
+
+/* ============================================================ SINCRONIZAÇÃO
+   Duas pessoas na mesma base, usando um repositório privado do GitHub como
+   cofre compartilhado. O que sobe é o mesmo bloco cifrado do resto do sistema:
+   o GitHub guarda ruído, não nomes.
+
+   O controle de versão é do próprio GitHub: todo arquivo tem um "sha", e a
+   gravação só passa se você mandar o sha da versão que leu. Se a outra pessoa
+   gravou nesse meio-tempo, o GitHub recusa — aí a gente baixa o que ela fez,
+   junta com o que é seu e grava de novo. É isso que impede uma sobrescrever
+   a outra sem ninguém perceber.
+
+   O token fica no navegador de cada uma, nunca no repositório nem na página. */
+
+const CHAVE_TOKEN = 'fagron-rs-token';
+/* O endereço do repositório mora dentro do arquivo cifrado — ou seja, só é
+   conhecido DEPOIS da senha. Mas a tela de entrada precisa dele ANTES, para
+   buscar quem tem acesso. Então ele também fica aqui, ao lado do token, que
+   é por navegador de qualquer jeito. Nome de repositório não é segredo. */
+const CHAVE_SINC = 'fagron-rs-sinc';
+function guardarSincLocal(c){
+  try { localStorage.setItem(CHAVE_SINC, JSON.stringify({repo:c.repo, arquivo:c.arquivo, branch:c.branch})); }
+  catch (e) { /* navegador sem storage */ }
+}
+function sincLocal(){
+  try { const c = JSON.parse(localStorage.getItem(CHAVE_SINC) || 'null'); return (c && c.repo) ? c : null; }
+  catch (e) { return null; }
+}
+/* Número da versão do PROGRAMA (não dos dados). Sobe a cada entrega que muda
+   o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
+   com a página velha de gravar por cima do que ela nem sabe que existe:
+   uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
+const VERSAO_APP = 18;
+let versaoRemota = 0;
+let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
+let desatualizado = false;
+const TEXTO_DESATUALIZADO = 'Esta página está desatualizada. Alguém está usando uma versão mais nova '
+  + 'do sistema, com campos que a sua ainda não conhece — gravar assim apagaria o trabalho dela. '
+  + 'Salve nada, aperte Ctrl+Shift+R para atualizar a página, e continue normalmente.';
+function versaoDoTexto(t){
+  try { const p = JSON.parse(t); return (p && typeof p.app === 'number') ? p.app : 0; }
+  catch (e) { return 0; }
+}
+/* A página publicada como artefato roda numa caixa que barra qualquer chamada
+   para fora. Não é erro de configuração: é regra da plataforma. A sincronização
+   só funciona na versão em arquivo (GitHub Pages ou index.html no computador). */
+const DENTRO_DO_ARTEFATO = /claudeusercontent\.com$/.test(location.hostname)
+  || !!(window.claude && window.claude.use && !window.__standalone);
+function erroDeRede(e){
+  const bloqueio = e instanceof TypeError || /failed to fetch|load failed|networkerror/i.test(String(e && e.message));
+  if (!bloqueio) return null;
+  return DENTRO_DO_ARTEFATO
+    ? 'Esta versão do sistema não consegue falar com o GitHub — a página publicada no Claude bloqueia acesso à internet. '
+      + 'A sincronização funciona na versão em arquivo: abra o index.html publicado no GitHub Pages, ou no seu computador, e configure lá.'
+    : 'Não consegui alcançar o GitHub. Confira sua conexão. Se você abriu o arquivo com duplo clique, '
+      + 'publique-o no GitHub Pages: aberto direto do disco o navegador costuma barrar a chamada.';
+}
+const API = 'https://api.github.com';
+let shaRemoto = null;      /* versão do arquivo que esta aba leu por último */
+let sincronizando = false;
+let ultimoPuxao = 0;
+
+function tokenGit(){
+  try { return localStorage.getItem(CHAVE_TOKEN) || ''; } catch (e) { return ''; }
+}
+/* O gerenciador de senhas do navegador adora preencher este campo sozinho,
+   e o que ele põe ali passa por token até a chamada falhar sem explicação.
+   Um token do GitHub tem prefixo conhecido e é longo. */
+const TEXTO_TOKEN_TORTO = 'Isto não parece um token do GitHub. Um token começa com '
+  + 'github_pat_ e é bem comprido, uns 90 caracteres. Se o campo foi preenchido sozinho '
+  + 'pelo navegador, clique dentro dele, aperte Ctrl+A, apague, e cole o token de novo.';
+function pareceToken(t){
+  t = String(t || '').trim();
+  return /^(github_pat_|ghp_|gho_|ghu_|ghs_|ghr_)/.test(t) && t.length >= 40;
+}
+function guardarToken(t){
+  try { t ? localStorage.setItem(CHAVE_TOKEN, t) : localStorage.removeItem(CHAVE_TOKEN); return true; }
+  catch (e) { return false; }
+}
+function confSinc(){
+  const c = (S && S.params && S.params.sinc) || {};
+  return { repo: (c.repo || '').trim(), arquivo: (c.arquivo || 'dados.json').trim(),
+           branch: (c.branch || 'main').trim() };
+}
+const sincLigada = () => !!(confSinc().repo && tokenGit());
+
+function urlConteudo(){
+  const c = confSinc();
+  return `${API}/repos/${c.repo}/contents/${encodeURIComponent(c.arquivo)}?ref=${encodeURIComponent(c.branch)}`;
+}
+function urlGravacao(){
+  const c = confSinc();
+  return `${API}/repos/${c.repo}/contents/${encodeURIComponent(c.arquivo)}`;
+}
+function cabecalhos(){
+  return { 'Accept': 'application/vnd.github+json',
+           'Authorization': 'Bearer ' + tokenGit(),
+           'X-GitHub-Api-Version': '2022-11-28' };
+}
+/* base64 que aguenta acento — btoa sozinho quebra em UTF-8 */
+const paraB64 = t => btoa(unescape(encodeURIComponent(t)));
+const deB64   = t => decodeURIComponent(escape(atob(String(t).replace(/\s/g, ''))));
+
+function erroGit(r, corpo){
+  const m = (corpo && corpo.message) || '';
+  if (r.status === 401) return 'Token inválido ou vencido. Cadastre um novo em Parâmetros → Sincronização.';
+  if (r.status === 403 && /rate limit/i.test(m)) return 'Limite de chamadas do GitHub atingido. Tente daqui a pouco.';
+  if (r.status === 403) return 'O token não tem permissão de escrita neste repositório.';
+  if (r.status === 404) return 'Repositório, arquivo ou branch não encontrado — confira o nome em Parâmetros → Sincronização.';
+  if (r.status === 409 || r.status === 422) return 'conflito';
+  return 'GitHub respondeu ' + r.status + (m ? ': ' + m : '');
+}
+
+/* Confere o repositório em si: existe? é privado? este token escreve nele?
+   Sem isso, um nome errado de repositório passa como "arquivo ainda não criado". */
+async function conferirRepo(){
+  const c = confSinc();
+  const r = await fetch(`${API}/repos/${c.repo}`, {headers: cabecalhos(), cache: 'no-store'});
+  const corpo = await r.json().catch(() => null);
+  if (r.status === 404) throw new Error('Repositório não encontrado, ou este token não tem acesso a ele. Confira o nome e, no token, se você marcou justamente este repositório.');
+  if (!r.ok) throw new Error(erroGit(r, corpo));
+  return corpo || {};
+}
+
+/* ---- baixar ---- */
+async function baixarDoGit(){
+  const r = await fetch(urlConteudo(), {headers: cabecalhos(), cache: 'no-store'});
+  if (r.status === 404) return {vazio: true};          /* primeira vez: arquivo ainda não existe */
+  const corpo = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(erroGit(r, corpo));
+  const texto = deB64(corpo.content || '');
+  versaoRemota = versaoDoTexto(texto);
+  desatualizado = versaoRemota > VERSAO_APP;
+  return {sha: corpo.sha, texto};
+}
+
+/* ---- subir ---- */
+async function subirParaGit(texto, sha, mensagem){
+  const r = await fetch(urlGravacao(), {
+    method: 'PUT', headers: Object.assign({'Content-Type': 'application/json'}, cabecalhos()),
+    body: JSON.stringify({
+      message: mensagem || ('Controle de R&S — ' + new Date().toISOString().slice(0, 16).replace('T', ' ')),
+      content: paraB64(texto),
+      branch: confSinc().branch,
+      sha: sha || undefined,
+    }),
+  });
+  const corpo = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(erroGit(r, corpo));
+  const shaNovo = corpo && corpo.content && corpo.content.sha;
+  /* sem sha de volta não houve commit — melhor falhar do que dizer que gravou */
+  if (!shaNovo) throw new Error('o GitHub respondeu sem confirmar o commit');
+  return shaNovo;
+}
+
+/* Converte o que veio do arquivo em estado utilizável, pedindo a senha se
+   estiver cifrado com uma chave que esta aba ainda não tem. */
+async function abrirConteudo(texto){
+  /* arquivo recém-criado, vazio ou com lixo: trata como "ainda não tem nada",
+     em vez de travar a sincronização inteira */
+  if (!texto || !texto.trim()) return {};
+  let pac = null;
+  try { pac = JSON.parse(texto); } catch (e) { return {}; }
+  if (!pac || typeof pac !== 'object') return {};
+  usuariosRemotos = Array.isArray(pac.usuarios) ? pac.usuarios : null;
+  if (!ehCofre(pac)) return pac;
+  if (!DK) throw new Error('senha');
+  try {
+    return await decifrar(DK, pac);
+  } catch (e) {
+    /* o arquivo abre com outra chave: alguém refez as senhas do zero em vez
+       de adicionar pessoas, e as duas bases deixaram de ser a mesma */
+    throw new Error('O arquivo do repositório foi cifrado com outra senha, diferente da sua. '
+      + 'Isso acontece quando alguém usa "Proteger com senha" de novo em vez de adicionar pessoas. '
+      + 'Antes de gravar por cima, guarde uma Cópia de segurança e combine qual das duas bases vale.');
+  }
+}
+
+/* ---- puxar o que a outra pessoa fez ---- */
+async function puxar(silencioso){
+  if (!sincLigada() || sincronizando) return false;
+  sincronizando = true;
+  try {
+    const remoto = await baixarDoGit();
+    ultimoPuxao = Date.now();
+    if (desatualizado){
+      estado('página desatualizada — atualize com Ctrl+Shift+R', 'err');
+      document.getElementById('btn-save').disabled = true;
+      toast(TEXTO_DESATUALIZADO);
+      return false;
+    }
+    if (remoto.vazio){ if (!silencioso) toast('O arquivo ainda não existe no repositório — salve para criá-lo'); return false; }
+    if (remoto.sha === shaRemoto){ if (!silencioso) toast('Já está na versão mais recente'); return false; }
+    const vindo = await abrirConteudo(remoto.texto);
+    const estado = vindo && vindo.pacote ? vindo.estado : vindo;
+    const base = vindo && vindo.pacote ? vindo.base : null;
+    const d = compararPacote(estado, base);
+    shaRemoto = remoto.sha;
+    const nP = fundirParams(estado && estado.params);
+    const nU = fundirUsuarios();
+    if (!d.total && !d.conflitos.length && !nP && !nU){ if (!silencioso) toast('Nada de novo'); return false; }
+    /* o que a outra pessoa mexeu entra; o que você mexeu depois continua seu */
+    aplicarDoRemoto(d);
+    marcarPartida();
+    render();
+    const partes = [];
+    if (d.total + d.conflitos.length) partes.push(`${d.total + d.conflitos.length} alteração(ões) de outra pessoa`);
+    if (nU) partes.push('a lista de pessoas com acesso mudou');
+    if (nP) partes.push(`${nP} ajuste(s) de configuração`);
+    toast(partes.join(' · ') +
+          (d.conflitos.length ? ` — ${d.conflitos.length} mexida(s) pelas duas ficaram com a sua versão` : ''));
+    return true;
+  } catch (e) {
+    if (String(e.message) === 'senha') { if (!silencioso) toast('Entre com a senha antes de sincronizar'); }
+    else if (!silencioso) toast('Não deu para baixar: ' + (erroDeRede(e) || e.message));
+    return false;
+  } finally { sincronizando = false; }
+}
+/* Parâmetros: chave por chave, a versão dela entra no que eu não mexi.
+   O que eu mexi nesta sessão continua meu, como nos registros. */
+function fundirParams(remotos){
+  if (!remotos || !BASE_PARAMS) return 0;
+  let n = 0;
+  const reguaVelha = (remotos.etapasV || 0) < (S.params.etapasV || 0);
+  Object.keys(remotos).forEach(k => {
+    if (reguaVelha && (k === 'etapas' || k === 'etapasV')) return;
+    const meu = JSON.stringify(S.params[k]);
+    const partida = JSON.stringify(BASE_PARAMS[k]);
+    const dela = JSON.stringify(remotos[k]);
+    if (dela === meu) return;
+    if (meu === partida){ S.params[k] = JSON.parse(dela); n++; }
+  });
+  return n;
+}
+/* Pessoas com acesso: mesma regra, por pessoa. Quem eu não toquei vem como
+   está no repositório — inclusive gente nova e gente que saiu. */
+function fundirUsuarios(){
+  if (!usuariosRemotos || !COFRE) return 0;
+  const antes = JSON.stringify(COFRE.usuarios.map(u => u.id + ':' + u.nome + ':' + u.papel + ':' + (u.ativo !== false)));
+  const meus = new Map(COFRE.usuarios.map(u => [u.id, u]));
+  const deles = new Map(usuariosRemotos.map(u => [u.id, u]));
+  const nova = [];
+  deles.forEach((u, id) => { nova.push(usuariosMexidos.has(id) ? meus.get(id) : u); });
+  meus.forEach((u, id) => { if (!deles.has(id) && usuariosMexidos.has(id)) nova.push(u); });
+  COFRE.usuarios = nova.filter(Boolean);
+  if (EU){
+    const eu = COFRE.usuarios.find(u => u.id === EU.id);
+    if (eu) EU = eu, PAPEL = eu.papel || 'equipe';
+    else toast('A administradora tirou o seu acesso. Você continua nesta aba até fechar a página.');
+  }
+  const depois = JSON.stringify(COFRE.usuarios.map(u => u.id + ':' + u.nome + ':' + u.papel + ':' + (u.ativo !== false)));
+  return antes === depois ? 0 : 1;
+}
+
+/* mesma mecânica do pacote, sem perguntar: entra tudo que só a outra mexeu */
+function aplicarDoRemoto(d){
+  COLECOES.forEach(col => {
+    const p = d.plano[col];
+    if (!p) return;
+    const pos = new Map((S[col] || []).map((r, i) => [r.id, i]));
+    p.mudados.forEach(r => { S[col][pos.get(r.id)] = r; });
+    if (p.apagados && p.apagados.length){
+      const fora = new Set(p.apagados.map(r => r.id));
+      S[col] = S[col].filter(r => !fora.has(r.id));
+    }
+    p.novos.forEach(r => S[col].unshift(r));
+  });
+  (S.vagas || []).forEach(ajustarEtapasVaga);
+  d.listasNovas.forEach(([k, v]) => {
+    if (!Array.isArray(S.listas[k])) S.listas[k] = [];
+    if (!S.listas[k].includes(v)) S.listas[k].push(v);
+  });
+  delete S._feriados;
+}
+
+/* ---- gravar, resolvendo conflito sozinho ---- */
+async function empurrar(){
+  if (!sincLigada()) return false;
+  if (desatualizado) throw new Error(TEXTO_DESATUALIZADO);
+  carimbarAutoria();
+  const tentar = async (sha) => subirParaGit(await embrulharPacote(), sha);
+  try {
+    shaRemoto = await tentar(shaRemoto);
+    marcarPartida();
+    return true;
+  } catch (e) {
+    if (String(e.message) !== 'conflito') throw e;
+    /* alguém gravou antes: junta e tenta de novo, uma vez */
+    estado('outra pessoa gravou antes — juntando', 'dirty');
+    const remoto = await baixarDoGit();
+    if (desatualizado) throw new Error(TEXTO_DESATUALIZADO);
+    const vindo = await abrirConteudo(remoto.texto);
+    const estadoRemoto = vindo && vindo.pacote ? vindo.estado : vindo;
+    const baseRemota = vindo && vindo.pacote ? vindo.base : null;
+    const d = compararPacote(estadoRemoto, baseRemota);
+    fundirParams(estadoRemoto && estadoRemoto.params);
+    fundirUsuarios();
+    aplicarDoRemoto(d);
+    shaRemoto = await tentar(remoto.sha);
+    marcarPartida();
+    render();
+    toast('Juntado com o que a outra pessoa gravou' +
+          (d.conflitos.length ? ` — ${d.conflitos.length} registro(s) ficaram com a sua versão` : ''));
+    return true;
+  }
+}
+
+/* ---- tela de configuração ---- */
+function telaSinc(){
+  const c = confSinc();
+  const tem = !!tokenGit();
+  const el = document.getElementById('modal');
+  el.innerHTML = `<div class="modal-box cvbox" role="dialog" aria-modal="true">
+    <h3>Sincronização pelo GitHub</h3>
+    <div class="cvcorpo">
+      <div class="hint">Com isto ligado, você e mais alguém trabalham na <b>mesma base</b>: o sistema
+        grava num repositório privado e avisa quando a outra pessoa mexeu. O conteúdo sobe
+        <b>cifrado com a senha do sistema</b> — o GitHub guarda um bloco ilegível, não os nomes.</div>
+      ${DENTRO_DO_ARTEFATO ? `<div class="cverro" style="margin-top:12px"><b>Aqui isto não vai funcionar.</b>
+        Esta versão está publicada no Claude, e páginas publicadas não têm permissão de acessar a internet —
+        a chamada ao GitHub é barrada antes de sair. Use a <b>versão em arquivo</b> (o <code>index.html</code>),
+        publicada no GitHub Pages, e configure a sincronização por lá. Esta aqui continua servindo
+        para trabalhar sozinha.</div>` : ''}
+
+      <label class="cvlab">Repositório <span class="opc">no formato usuario/repositorio</span></label>
+      <input id="sc-repo" value="${esc(c.repo)}" placeholder="lailanyelle/rs-fagron-dados" autocomplete="off">
+      <label class="cvlab">Arquivo</label>
+      <input id="sc-arq" value="${esc(c.arquivo)}" placeholder="dados.json" autocomplete="off">
+      <label class="cvlab">Branch</label>
+      <input id="sc-branch" value="${esc(c.branch)}" placeholder="main" autocomplete="off">
+
+      <label class="cvlab">Seu token de acesso ${tem ? '<span class="opc">já cadastrado — deixe em branco para manter</span>' : ''}</label>
+      <input id="sc-token" type="password" placeholder="${tem ? '••••••••••••' : 'github_pat_…'}" autocomplete="new-password" name="sc-token-${Date.now()}">
+      <div class="hint">O token fica <b>só neste navegador</b>. Ele não vai para o repositório nem para
+        dentro da página. Cada pessoa cadastra o dela.</div>
+
+      <details class="cvtexto" ${c.repo ? '' : 'open'}><summary>Como criar o repositório e o token</summary>
+        <ol class="rclista">
+          <li>No GitHub, crie um repositório <b>privado</b> — pode se chamar <code>rs-fagron-dados</code>.
+            Deixe vazio, sem README.</li>
+          <li>Vá em <b>Settings → Developer settings → Personal access tokens → Fine-grained tokens →
+            Generate new token</b>.</li>
+          <li>Em <b>Repository access</b>, escolha <b>Only select repositories</b> e marque só esse repositório.</li>
+          <li>Em <b>Permissions → Repository permissions</b>, ponha <b>Contents</b> em <b>Read and write</b>.
+            Só isso — nada mais.</li>
+          <li>Gere, copie o token e cole aqui. Ele só aparece uma vez.</li>
+          <li>Repita os passos 2 a 5 no GitHub da outra pessoa, depois de você dar acesso a ela ao
+            repositório em <b>Settings → Collaborators</b>.</li>
+        </ol>
+      </details>
+      <div class="cverro" id="sc-erro" hidden></div>
+    </div>
+    <div class="modal-acts">
+      <button data-conf="0">Cancelar</button>
+      ${tem ? '<button class="sm" id="sc-esquecer">Esquecer o token deste navegador</button>' : ''}
+      <button class="sm" id="sc-testar">Testar conexão</button>
+      <button class="danger" id="sc-salvar">Salvar</button>
+    </div></div>`;
+  el.hidden = false;
+  document.getElementById('sc-repo').focus();
+}
+function lerFormSinc(){
+  const g = id => (document.getElementById(id).value || '').trim();
+  return {repo: g('sc-repo'), arquivo: g('sc-arq') || 'dados.json', branch: g('sc-branch') || 'main', token: g('sc-token')};
+}
+function guardarSinc(){
+  const f = lerFormSinc();
+  const er = document.getElementById('sc-erro');
+  if (f.repo && !/^[\w.-]+\/[\w.-]+$/.test(f.repo)){
+    er.hidden = false; er.innerHTML = 'O repositório precisa vir como <b>usuario/repositorio</b>.'; return;
+  }
+  S.params.sinc = {repo: f.repo, arquivo: f.arquivo, branch: f.branch};
+  guardarSincLocal(S.params.sinc);
+  if (f.token && !pareceToken(f.token)){
+    er.hidden = false; er.innerHTML = esc(TEXTO_TOKEN_TORTO); return;
+  }
+  if (f.token && !guardarToken(f.token)){
+    er.hidden = false; er.innerHTML = 'Este navegador não deixou guardar o token.'; return;
+  }
+  shaRemoto = null;
+  fecharModal(0);
+  if (TRANCADO){ if (sincLigada()) portaoTentar(); else telaPortao('Falta o token — sem ele não há como alcançar o repositório.'); return; }
+  marcarSujo(); render();
+  toast(sincLigada() ? 'Sincronização configurada' : 'Configuração guardada — falta o token');
+}
+async function testarSinc(){
+  const f = lerFormSinc();
+  const er = document.getElementById('sc-erro');
+  er.hidden = false; er.innerHTML = 'Conferindo…';
+  const antes = {p: S.params.sinc, t: tokenGit()};
+  S.params.sinc = {repo: f.repo, arquivo: f.arquivo, branch: f.branch};
+  if (f.token) guardarToken(f.token);
+  try {
+    if (!confSinc().repo) throw new Error('Preencha o repositório.');
+    if (!tokenGit()) throw new Error('Preencha o token.');
+    if (!pareceToken(tokenGit())) throw new Error(TEXTO_TOKEN_TORTO);
+    const repo = await conferirRepo();
+    const avisos = [];
+    if (repo.permissions && repo.permissions.push === false)
+      avisos.push('Este token <b>só lê</b>. Volte no GitHub e ponha <b>Contents: Read and write</b>, senão o salvamento vai falhar.');
+    if (repo.private === false)
+      avisos.push('Este repositório é <b>público</b>. O conteúdo sobe cifrado, mas o ideal para dado de pessoa é repositório privado.');
+    const r = await baixarDoGit();
+    const ok = r.vazio
+      ? '<b>Conectou.</b> O arquivo ainda não existe — ele é criado no primeiro salvamento.'
+      : `<b>Conectou.</b> Arquivo encontrado, ${(r.texto.length/1024).toFixed(0)} KB.`;
+    er.innerHTML = ok + (avisos.length ? '<br><br>' + avisos.join('<br>') : '');
+    const bom = !avisos.length;
+    er.style.color = bom ? 'var(--good)' : 'var(--warn)';
+    er.style.borderColor = bom ? 'var(--good)' : 'var(--warn)';
+    er.style.background = bom ? 'var(--good-bg)' : 'var(--warn-bg)';
+  } catch (e) {
+    er.style.color = ''; er.style.borderColor = ''; er.style.background = '';
+    er.innerHTML = '<b>Não conectou:</b> ' + esc(erroDeRede(e) || e.message);
+    /* O teste falhou: nada do que foi digitado vale. Devolve TAMBÉM o token
+       anterior — antes daqui, testar com o campo preenchido apagava o token
+       bom que já estava guardado, e ele não tem como ser lido de volta. */
+    S.params.sinc = antes.p; guardarToken(antes.t);
+  }
+}
+function esquecerToken(){
+  guardarToken('');
+  fecharModal(0); render();
+  toast('Token apagado deste navegador');
+}
+
+/* ============================================================ INÍCIO */
+/* Dados salvos numa versão anterior do app podem não ter os módulos novos.
+   Aqui o que existe é preservado e só o que falta vem da semente. */
+const COLECOES = ['vagas','candidatos','experiencia','admissao','integracao','contratos',
+                  'uniformes','notas'];
+function normalizar(d, semente){
+  /* Carimbo de limpeza: quando a semente traz um carimbo diferente do que estava
+     salvo, os registros salvos são descartados de propósito (foi um pedido de
+     zerar o sistema). As listas da Base sobrevivem, somadas às que ela criou. */
+  if (d && semente.reset && d.reset !== semente.reset){
+    const listasDela = (d && d.listas) || {};
+    const unidas = {};
+    Object.keys(Object.assign({}, semente.listas, listasDela)).forEach(k => {
+      const a = Array.isArray(semente.listas[k]) ? semente.listas[k] : [];
+      const b = Array.isArray(listasDela[k]) ? listasDela[k] : [];
+      unidas[k] = [...new Set(a.concat(b))];
+    });
+    d = { versao: d.versao, reset: semente.reset, params: d.params, listas: unidas };
+  }
+  const S2 = Object.assign({}, semente, d || {});
+  S2.reset = semente.reset || (d && d.reset) || '';
+  S2.params = Object.assign({}, semente.params, (d && d.params) || {});
+  if (!Array.isArray(S2.params.etapas) || !S2.params.etapas.length) S2.params.etapas = semente.params.etapas;
+  S2.params.etapas = S2.params.etapas.slice().sort((a,b) => a.n - b.n);
+  /* a versão da régua é a que ESTAVA salva, não a da semente — senão a
+     migração nunca se reconhece como necessária */
+  S2.params.etapasV = (d && d.params && d.params.etapasV) || 0;
+  migrarEtapas(S2, semente);
+  S2.listas = Object.assign({}, semente.listas, (d && d.listas) || {});
+  Object.keys(semente.listas).forEach(k => { if (!Array.isArray(S2.listas[k])) S2.listas[k] = semente.listas[k].slice(); });
+  COLECOES.forEach(k => { if (!Array.isArray(S2[k])) S2[k] = (semente[k] || []).slice(); });
+
+  const nE = S2.params.etapas.length;
+  S2.vagas.forEach(v => {
+    if (!Array.isArray(v.etapas)) v.etapas = [];
+    while (v.etapas.length < nE) v.etapas.push(null);
+    v.etapas.length = nE;
+  });
+  S2.experiencia.forEach(e => { if (e.idVaga === undefined) e.idVaga = ''; });
+  S2.integracao.forEach(g => { if (g.idVaga === undefined) g.idVaga = ''; });
+  if (S2.params.empresaIntegracao === undefined) S2.params.empresaIntegracao = 'FAGRON SERVICES';
+  if (S2.params.slaCiee === undefined) S2.params.slaCiee = 2;
+  if (S2.params.metaEfetivacao === undefined) S2.params.metaEfetivacao = 0.7;
+  S2.contratos.forEach(k => { if (k.idVaga === undefined) k.idVaga = ''; });
+  S2.uniformes.forEach(u => {
+    ['idVaga','vaga','telefone','cpf','cargo','setor','terceiro','sapato','camisa','calca','entregue','obs']
+      .forEach(f => { if (u[f] === undefined) u[f] = f === 'terceiro' ? 'NA' : ''; });
+    ['nascimento','admissao','dataEntrega'].forEach(f => { if (u[f] === undefined) u[f] = null; });
+  });
+  if (!Array.isArray(S2.listas.tamanhos) || !S2.listas.tamanhos.length)
+    S2.listas.tamanhos = ['PP','P','M','G','GG','XG'];
+  if (!Array.isArray(S2.params.empresasUniforme))
+    S2.params.empresasUniforme = ['FAGRON SERVICES','FAGRON DISTRIBUTION'];
+  /* Campo novo num registro antigo: completa pela semente, sem apagar o que ela já editou. */
+  COLECOES.forEach(col => {
+    const porId = new Map((semente[col] || []).map(r => [r.id, r]));
+    (S2[col] || []).forEach(r => {
+      const base = porId.get(r.id);
+      if (base) Object.keys(base).forEach(f => { if (r[f] === undefined) r[f] = base[f]; });
+    });
+  });
+  S2.candidatos.forEach(c => {
+    ['curriculo','curriculoArq','curriculoTexto'].forEach(f => { if (c[f] === undefined) c[f] = ''; });
+  });
+  /* o padrão da casa vale para o que já estava gravado, não só para o que for digitado */
+  COLECOES.forEach(col => (S2[col] || []).forEach(r => {
+    Object.keys(r).forEach(f => {
+      if (typeof r[f] !== 'string' || !r[f]) return;
+      if (f === 'id' || f === 'idVaga') return;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(r[f])) return;
+      r[f] = padronizar(f, r[f]);
+    });
+  }));
+  ['empresas','cargos','departamentos','gestores','statusVaga','tipoVaga','prioridade','statusCand',
+   'fontes','motivos','instituicoes','terceiros','tamanhos','checklist'].forEach(k => {
+    if (Array.isArray(S2.listas[k])) S2.listas[k] = S2.listas[k].map(v => caixaAlta(String(v)));
+  });
+  /* Retirada das quatro tarefas de captação do checklist (pedido de 22/08).
+     Roda uma vez só, marcada por carimbo, e tira a resposta correspondente de
+     cada admissão junto com a tarefa — o que estava marcado nas outras continua
+     no lugar certo e o percentual passa a ser sobre as tarefas que sobraram. */
+  const FORA_DO_CHECKLIST = [
+    /^ALINHAMENTO( COM O GESTOR)?$/i, /^DIVULGA[ÇC][ÃA]O\s+CATHO$/i,
+    /^DIVULGA[ÇC][ÃA]O\s+INDEED$/i, /^ENVIO\s+(DE\s+)?(DA\s+)?REQUISI[ÇC][ÃA]O\s+E\s+ROTEIRO$/i,
+  ];
+  S2.migr = S2.migr || {};
+  if (!S2.migr.checklistCaptacao && Array.isArray(S2.listas.checklist)){
+    const fora = [];
+    S2.listas.checklist.forEach((t, i) => {
+      if (FORA_DO_CHECKLIST.some(re => re.test(String(t).trim()))) fora.push(i);
+    });
+    fora.sort((a, b) => b - a).forEach(i => {
+      S2.listas.checklist.splice(i, 1);
+      (S2.admissao || []).forEach(a => { if (Array.isArray(a.itens)) a.itens.splice(i, 1); });
+    });
+    S2.migr.checklistCaptacao = true;
+  }
+  if (typeof S2.params.empresaIntegracao === 'string')
+    S2.params.empresaIntegracao = caixaAlta(S2.params.empresaIntegracao);
+  if (Array.isArray(S2.params.empresasUniforme))
+    S2.params.empresasUniforme = S2.params.empresasUniforme.map(caixaAlta);
+  if (!S2.params.sinc) S2.params.sinc = {repo:'', arquivo:'dados.json', branch:'main'};
+  if (!Array.isArray(S2.notas)) S2.notas = [];
+  S2.notas.forEach(n => { if (n.feito === undefined) n.feito = false; if (n.criada === undefined) n.criada = null; });
+  if (!Array.isArray(S2.listas.feriados)) S2.listas.feriados = [];
+  if (!Array.isArray(S2.listas.terceiros)){
+    S2.listas.terceiros = ['NA'].concat([...new Set(S2.uniformes.map(u => (u.terceiro||'').trim())
+      .filter(v => v && v.toUpperCase() !== 'NA'))].sort((a,b) => a.localeCompare(b,'pt-BR')));
+  }
+  if (!S2.listas.terceiros.some(v => v.toUpperCase() === 'NA')) S2.listas.terceiros.unshift('NA');
+  if (!Array.isArray(S2.listas.instituicoes) || !S2.listas.instituicoes.length){
+    S2.listas.instituicoes = [...new Set(S2.contratos.map(k => (k.faculdade||'').trim()).filter(Boolean))]
+      .sort((a,b) => a.localeCompare(b,'pt-BR'));
+  }
+  delete S2._feriados;
+  const nC2 = S2.listas.checklist.length;
+  S2.admissao.forEach(a => {
+    if (!Array.isArray(a.itens)) a.itens = [];
+    while (a.itens.length < nC2) a.itens.push('NÃO');
+    a.itens.length = nC2;
+  });
+  S2.versao = 2;
+  return S2;
+}
+
+async function iniciar(){
+  let dados = null;
+  try {
+    const r = await fetch('dados.json', {cache:'no-store'});
+    if (r.ok) dados = await r.json();
+  } catch (e) { /* primeira versão ainda não tem o arquivo */ }
+  const semente = JSON.parse(document.getElementById('semente').textContent);
+  /* fora da versão publicada não há repositório para consultar */
+  if (!semente.trancado && ehCofre(dados)){ pedirSenha(dados); return; }
+  /* A página publicada não carrega dado nenhum: quem abrir o endereço sem
+     credencial não vê nem a Base. Tudo vem do repositório privado, depois
+     de a pessoa dizer quem é. */
+  if (semente.trancado){
+    TRANCADO = true;
+    S = normalizar(ehCofre(dados) ? null : dados, semente);
+    /* configuração deste navegador vence a que veio embutida na página */
+    const cLocal = sincLocal();
+    if (cLocal) S.params.sinc = Object.assign({}, S.params.sinc, cLocal);
+    BASE = assinarTudo(S);
+    api = await (window.claude && window.claude.use ? window.claude.use('artifact') : null);
+    podeSalvar = !!api;
+    /* A LISTA DE PESSOAS VEM DO REPOSITÓRIO, não da cópia deste navegador.
+       A cópia local envelhece: quem entrasse por ela via a equipe de dias
+       atrás, mesmo com o sistema atualizado. Ela continua servindo de plano B
+       quando a rede falha, e o trabalho não gravado é recuperado logo depois,
+       na tela de senha. */
+    if (sincLigada() && await portaoTentar(true)) return;
+    if (ehCofre(dados)){
+      pedirSenha(dados, 'Não consegui falar com o repositório agora — entrando pela cópia deste navegador.');
+      return;
+    }
+    const loc = lerLocal();
+    if (loc && loc.carga){
+      try { const p = JSON.parse(loc.carga); if (ehCofre(p)){
+        pedirSenha(p, 'Não consegui falar com o repositório agora — entrando pela cópia deste navegador.'); return; } }
+      catch (e) { /* segue */ }
+    }
+    if (sincLigada()) await portaoTentar();
+    else telaPortao();
+    return;
+  }
+  arrancar(dados);
+}
+
+/* Daqui para baixo o conteúdo já está em claro — ou porque nunca teve senha,
+   ou porque a senha certa acabou de abrir o cofre. */
+async function arrancar(dados){
+  const semente = JSON.parse(document.getElementById('semente').textContent);
+  S = normalizar(dados, semente);
+  if (!BASE) BASE = assinarTudo(S);   /* ponto de partida desta sessão */
+  BASE_PARAMS = JSON.parse(JSON.stringify(S.params || {}));
+  usuariosMexidos = new Set();
+
+  /* As pontes NÃO rodam ao carregar: só o que você marcar de agora em diante
+     alimenta as outras abas. Assim o histórico migrado não é reprocessado. */
+
+  api = await (window.claude && window.claude.use ? window.claude.use('artifact') : null);
+  podeSalvar = !!api;
+  estado();
+  render();
+
+  /* voltou para a janela depois de um tempo: confere se a outra pessoa gravou */
+  window.addEventListener('focus', () => {
+    if (sincLigada() && !sujo && Date.now() - ultimoPuxao > 30000) puxar(true);
+  });
+  /* trocar de aba ou minimizar conta como "parei de mexer": grava antes de sumir */
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && sujo && !salvando && autoLigado() && podeGravar()) salvar();
+  });
+  if (sincLigada()) puxar(true);
+  ligarBusca();
+
+  window.addEventListener('beforeunload', ev => { if (sujo){ ev.preventDefault(); ev.returnValue = ''; } });
+  document.addEventListener('keydown', ev => {
+    if ((ev.metaKey || ev.ctrlKey) && ev.key === 's'){ ev.preventDefault(); if (sujo) salvar(); }
+  });
+}
+iniciar();
+
+/* ===================== ASSISTENTE DE PRIORIDADES =====================
+   Fica numa função fechada de propósito: ele LÊ o que o sistema já calcula
+   (compromissos, calcVaga, calcExp) e não publica nada no espaço global, de
+   modo que não há como colidir com nome nenhum do programa.
+
+   Duas regras que não mudam:
+   1. Ele nunca grava sozinho. Toda frase vira uma ficha de confirmação.
+   2. Ele não inventa. Se a conta não existir, ele diz que não sabe. */
+(function(){
+'use strict';
+
+const $ = id => document.getElementById(id);
+const sa = t => String(t == null ? '' : t).toLowerCase()
+  .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+/* S é declarado com let no mesmo script, então não existe em window:
+   aqui ele é alcançado pelo escopo, não pelo objeto global. */
+const pronto = () => { try { return !TRANCADO && !!(S && S.params && Array.isArray(S.vagas)); }
+                       catch (e) { return false; } };
+
+/* ---------------------------------------------------------- prioridades */
+/* Peso por natureza do prazo: o da CLT vem na frente porque, vencido, não
+   se recupera; o SLA interno atrasado ainda dá para correr atrás. Dentro
+   de cada natureza, manda o tamanho do atraso. */
+const PESO = { experiencia:300, vaga:180, contrato:140, integracao:120, uniforme:100, nota:60 };
+
+function prioridades(){
+  let lista = [];
+  try { lista = compromissos() || []; } catch (e) { return []; }
+  return lista.map(c => {
+    const atrasado = c.faltam < 0;
+    const peso = (PESO[c.tipo] || 90)
+      + (atrasado ? 150 + Math.min(130, (-c.faltam) * 6) : Math.max(0, 45 - c.faltam * 4));
+    return Object.assign({}, c, { peso, atrasado });
+  }).sort((a, b) => b.peso - a.peso);
+}
+
+function porque(c){
+  const un = c.corridos ? 'dia(s)' : 'dia(s) úteis';
+  const quando = c.faltam < 0 ? 'Devia estar pronto em ' + fmtD(c.data) + ' — <b>atrasado há '
+                   + (-c.faltam) + ' ' + un + '</b>.'
+    : c.faltam === 0 ? '<b>É para hoje</b> (' + fmtD(c.data) + ').'
+    : 'Para ' + fmtD(c.data) + ' — faltam ' + c.faltam + ' ' + un + '.';
+  const extra = c.tipo === 'experiencia'
+      ? ' Prazo da CLT: conta em dias corridos e não espera.'
+    : c.tipo === 'vaga' && c.nota && /etapa/.test(c.nota)
+      ? ' É a etapa que está segurando a vaga — cada dia aqui empurra todas as seguintes.'
+    : c.nota ? ' ' + esc(c.nota) : '';
+  return quando + extra;
+}
+
+const linha = (c, i) => `<div class="as-item"><div class="as-ord">${i + 1}</div><div>
+  <div class="as-t">${esc(c.titulo)}${c.quem ? ' · ' + esc(c.quem) : ''}
+    <span class="pill ${c.atrasado ? 'crit' : 'warn'}">${CAL_ROTULO[c.tipo] || c.tipo}</span></div>
+  <div class="as-pq">${porque(c)}</div>
+  <button class="as-ir" data-as-ir="${esc(c.aba)}">Abrir ${esc(c.aba)} →</button></div></div>`;
+
+/* ------------------------------------------------------------ conversa */
+const corpo = () => $('as-corpo');
+function diz(html){
+  const el = document.createElement('div');
+  el.className = 'as-msg ele'; el.innerHTML = html;
+  corpo().appendChild(el); corpo().scrollTop = corpo().scrollHeight;
+}
+function eu(txt){
+  const el = document.createElement('div');
+  el.className = 'as-msg eu'; el.textContent = txt;
+  corpo().appendChild(el); corpo().scrollTop = corpo().scrollHeight;
+}
+
+function ordemDoDia(){
+  const p = prioridades();
+  const h = new Date().getHours();
+  const ola = h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
+  const quem = (typeof quemSou === 'function' ? quemSou() : '') || '';
+  const nome = quem && quem !== 'ADMINISTRADORA' && quem !== 'EQUIPE'
+    ? ', ' + quem.split(' ')[0].charAt(0) + quem.split(' ')[0].slice(1).toLowerCase() : '';
+  if (!p.length){
+    diz(`<b>${ola}${nome}.</b> Olhei as vagas abertas, a experiência e o calendário:
+         <b>não há nada pendente</b>. Quando aparecer, eu ordeno aqui.`);
+    return;
+  }
+  const atras = p.filter(x => x.atrasado).length;
+  diz(`<b>${ola}${nome}.</b> ${atras ? 'Tem <b>' + atras + '</b> coisa(s) em atraso e ' : 'Tem '}
+       ${p.length - atras} chegando. Nesta ordem:`);
+  diz(p.slice(0, 4).map(linha).join(''));
+  if (p.length > 4) diz(`Outras <b>${p.length - 4}</b> estão na fila e podem esperar.`);
+  setTimeout(() => diz(`Dá para lançar escrevendo, também: <i>"a vaga de auxiliar, o gestor
+    entrevista dia 20"</i>. Eu mostro o que entendi antes de gravar.`), 50);
+}
+
+/* ------------------------------------------------- perguntas calculadas */
+const PERGUNTAS = [
+  { chip:'O que está fora do SLA?', chaves:['sla','fora do prazo','atrasad'],
+    fn(){
+      const P = S.params;
+      const f = (S.vagas || []).map(v => ({v, c: calcVaga(v)}))
+        .filter(x => x.c.aberta && x.c.statusSla === 'FORA')
+        .sort((a, b) => b.c.fora - a.c.fora);
+      if (!f.length) return 'Nenhuma vaga fora do SLA no momento.';
+      return `<b>${f.length} vaga(s)</b> com etapa fora do prazo:` + f.map(x => {
+        const quais = x.c.flags.map((fl, i) => fl === 'ATRASADO' ? P.etapas[i].nome : null)
+          .filter(Boolean);
+        return `<div class="as-item"><div class="as-ord">!</div><div>
+          <div class="as-t">${esc(x.v.cargo || x.v.id)}${x.v.empresa ? ' · ' + esc(x.v.empresa) : ''}</div>
+          <div class="as-pq">Aberta há ${x.c.dias} dias. Fora do prazo em
+            <b>${quais.length}</b> etapa(s): ${esc(quais.join(', '))}.
+            Agora está em <b>${esc(x.c.etapaNome)}</b>.</div></div></div>`;
+      }).join('');
+    }},
+  { chip:'O que vence esta semana?', chaves:['semana','vence','venc','prazo'],
+    fn(){
+      const p = prioridades().filter(c => c.faltam >= 0 && c.faltam <= 5);
+      if (!p.length) return 'Nada vence nos próximos dias úteis. O que pega é o que já passou.';
+      return 'Até o fim da semana:' + p.map(linha).join('');
+    }},
+  { chip:'Qual a vaga mais crítica?', chaves:['critic','pior','urgente','primeiro','comec'],
+    fn(){
+      const ab = (S.vagas || []).map(v => ({v, c: calcVaga(v)})).filter(x => x.c.aberta && x.v.abertura);
+      if (!ab.length) return 'Não há vaga em aberto com data de abertura preenchida.';
+      const pior = ab.sort((a, b) => (b.c.fora - a.c.fora) || (b.c.dias - a.c.dias))[0];
+      const slaTot = Math.max.apply(null, S.params.etapas.map(e => e.sla));
+      /* calcVaga.etapaNome é a última etapa CONCLUÍDA; quem está segurando a
+         vaga é a próxima não cumprida. Dizer "parada em" da concluída seria
+         apontar para o lugar errado. */
+      let prox = -1;
+      for (let i = 0; i < S.params.etapas.length; i++) if (!pior.v.etapas[i]){ prox = i; break; }
+      return `<b>${esc(pior.v.cargo || pior.v.id)}</b>${pior.v.empresa ? ', da ' + esc(pior.v.empresa) : ''}.
+        <br><br>Aberta há <b>${pior.c.dias} dias</b> (alvo do processo: ${slaTot}).
+        Última etapa concluída: <b>${esc(pior.c.etapaNome)}</b>, há
+        ${pior.c.diasEtapa == null ? '—' : pior.c.diasEtapa} dia(s).
+        ${prox >= 0 ? 'O que está segurando a vaga é <b>' + esc(S.params.etapas[prox].nome)
+            + '</b>, cujo prazo é de ' + S.params.etapas[prox].sla + ' dias da abertura.' : ''}
+        ${pior.c.fora ? '<br><br>São <b>' + pior.c.fora + ' etapa(s)</b> fora do prazo — e, como a régua é'
+          + ' acumulativa, cada dia parado aqui empurra todas as seguintes.' : ''}
+        <br><br>Farol: <span class="pill ${pior.c.farol === 'critico' ? 'crit'
+          : pior.c.farol === 'atencao' ? 'warn' : 'good'}">${pior.c.farol || '—'}</span>`;
+    }},
+  { chip:'Como está a experiência?', chaves:['experi','45','90','efetiv','prorrog'],
+    fn(){
+      const E = (S.experiencia || []).map(e => ({e, c: calcExp(e)}))
+        .filter(x => x.c.pendente || x.c.m1.k === 'crit' || x.c.m1.k === 'warn');
+      if (!E.length) return 'Nenhuma decisão de experiência pendente.';
+      return `<b>${E.length} pessoa(s)</b> esperando decisão:` + E.map(x => {
+        const m = !x.e.prorrog ? x.c.m1 : x.c.m2;
+        return `<div class="as-item"><div class="as-ord">${!x.e.prorrog ? S.params.expP1 : S.params.expP2}</div><div>
+          <div class="as-t">${esc(x.e.nome || '(sem nome)')}
+            <span class="pill ${m.k === 'crit' ? 'crit' : m.k === 'warn' ? 'warn' : 'good'}">${esc(m.t)}</span></div>
+          <div class="as-pq">${esc(x.c.acao)}. Admissão em ${fmtD(x.e.admissao)} —
+            ${x.c.diasCasa == null ? '' : x.c.diasCasa + ' dias de casa.'}</div></div></div>`;
+      }).join('');
+    }},
+  { chip:'Como estamos no mês?', chaves:['como estamos','no mes','resumo','numeros','visao geral'],
+    fn(){
+      const V = (S.vagas || []).map(v => ({v, c: calcVaga(v)}));
+      const ab = V.filter(x => x.c.aberta);
+      const ttf = V.map(x => x.c.ttf).filter(x => x != null && x > 0);
+      const med = V.filter(x => x.c.statusSla);
+      const dentro = med.filter(x => x.c.statusSla === 'DENTRO').length;
+      return `<b>Posição de hoje</b><br><br>
+        Vagas em aberto: <b>${ab.length}</b><br>
+        Aging médio das abertas: <b>${d1(avg(ab.map(x => x.c.dias)))}</b> dias<br>
+        Time to Fill médio: <b>${ttf.length ? d1(avg(ttf)) : '—'}</b> dias<br>
+        Dentro do SLA: <b>${med.length ? pct(dentro / med.length) : '—'}</b>
+        (${dentro} de ${med.length} medidas)<br>
+        Pendências no radar: <b>${prioridades().length}</b>`;
+    }},
+];
+
+/* ----------------------------------------------- entender a frase ditada */
+/* Casar por substring quebra fácil: "gestor vai falar" não aparece em "o
+   gestor da vaga X vai falar com os candidatos". Então cada etapa recebe
+   uma nota, somando palavra do próprio nome e sinônimo de ação. */
+const SIN = [
+  { re:/alinhamento|alinhar/,     p:['alinh','briefing','abertura com o gestor'] },
+  { re:/divulga/,                 p:['divulg','publiq','publico','publicou','anunci','no ar','subiu a vaga'] },
+  { re:/triagem|triar/,           p:['triagem','triei','triar','triou','curriculo','curriculos'] },
+  { re:/entrevista/,              p:['entrevist','falar','falou','conversar','conversa','recebe','vai ver'] },
+  { re:/parecer|shortlist/,       p:['parecer','shortlist'] },
+  { re:/aprova/,                  p:['aprov','fechamos','fechou','escolheu','escolhido'] },
+];
+function acharEtapa(t){
+  const etapas = (S.params && S.params.etapas) || [];
+  let melhor = -1, pts = 0;
+  etapas.forEach((e, i) => {
+    const nome = sa(e.nome);
+    let n = 0;
+    nome.split(' ').filter(w => w.length >= 5).forEach(w => {
+      if (t.indexOf(w.slice(0, 6)) >= 0) n += 2;
+    });
+    SIN.forEach(s => { if (s.re.test(nome) && s.p.some(x => t.indexOf(x) >= 0)) n += 4; });
+    const falaGestor = /gestor|gerente|lider/.test(t);
+    if (/gestor/.test(nome)) n += falaGestor ? 3 : -3;
+    if (/\brh\b/.test(nome) && /\brh\b|comigo|interna/.test(t)) n += 2;
+    if (n > pts){ pts = n; melhor = i; }
+  });
+  return pts >= 3 ? melhor : -1;
+}
+
+const SEMANA = ['domingo','segunda','terca','quarta','quinta','sexta','sabado'];
+function lerData(t){
+  if (/\bhoje\b/.test(t)) return iso(HOJE);
+  if (/\bamanha\b/.test(t)) return addD(iso(HOJE), 1);
+  if (/\bdepois de amanha\b/.test(t)) return addD(iso(HOJE), 2);
+  if (/\bontem\b/.test(t)) return addD(iso(HOJE), -1);
+  let m = t.match(/\b(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?\b/);
+  if (m){
+    const ano = m[3] ? (m[3].length === 2 ? 2000 + (+m[3]) : +m[3]) : HOJE.getFullYear();
+    return ano + '-' + String(+m[2]).padStart(2,'0') + '-' + String(+m[1]).padStart(2,'0');
+  }
+  m = t.match(/\bdia (\d{1,2})\b/);
+  if (m){
+    const x = new Date(HOJE.getFullYear(), HOJE.getMonth(), +m[1]);
+    if (x < HOJE) x.setMonth(x.getMonth() + 1);
+    return iso(x);
+  }
+  for (let i = 0; i < 7; i++){
+    if (new RegExp('\\b' + SEMANA[i] + '\\b').test(t)){
+      const x = new Date(HOJE);
+      let passos = (i - x.getDay() + 7) % 7;
+      if (passos === 0) passos = 7;
+      x.setDate(x.getDate() + passos);
+      return iso(x);
+    }
+  }
+  return null;
+}
+
+/* acha o registro pelo pedaço de nome que a pessoa falou */
+function melhorDe(lista, campos, t){
+  let achado = null, pts = 0;
+  (lista || []).forEach(r => {
+    const alvo = sa(campos.map(c => r[c] || '').join(' '));
+    let n = 0;
+    t.split(' ').filter(w => w.length >= 4).forEach(w => { if (alvo.indexOf(w) >= 0) n += w.length; });
+    if (n > pts){ pts = n; achado = r; }
+  });
+  return pts >= 5 ? achado : null;
+}
+function acharVaga(t){
+  const id = t.match(/\bv ?0*(\d{1,4})\b/);
+  if (id){
+    const alvo = 'V' + String(id[1]).padStart(4, '0');
+    const v = (S.vagas || []).find(x => x.id === alvo);
+    if (v) return v;
+  }
+  return melhorDe(S.vagas, ['cargo','empresa','aprovado','id'], t);
+}
+
+function interpretar(txt){
+  const t = sa(txt);
+  const data = lerData(t);
+
+  const vaga = acharVaga(t);
+  const k = acharEtapa(t);
+  if (vaga && k >= 0){
+    return { tipo:'etapa', vaga, k, data,
+      campos:[['Vaga', esc([vaga.cargo, vaga.empresa].filter(Boolean).join(' · ') || vaga.id) + ' · ' + vaga.id],
+              ['Etapa', (k + 1) + '. ' + esc(S.params.etapas[k].nome)],
+              ['Data', data ? fmtD(data)
+                 : '<span style="color:var(--crit)">faltou dizer o dia</span>']] };
+  }
+
+  const pessoa = melhorDe(S.experiencia, ['nome'], t);
+  if (pessoa && /(prorrog|efetiv|desligar|nao vou)/.test(t)){
+    const nao = /(nao |não )(vou |vamos )?(prorrog|efetiv)|desligar/.test(t);
+    const campo = (!pessoa.prorrog || /prorrog/.test(t)) ? 'prorrog' : 'efetiv';
+    return { tipo:'exp', pessoa, campo, valor: nao ? 'NÃO' : 'SIM',
+      campos:[['Pessoa', esc(pessoa.nome)],
+              ['Decisão', (campo === 'prorrog' ? 'Prorrogação' : 'Efetivação') + ': ' + (nao ? 'NÃO' : 'SIM')],
+              ['Marco', (campo === 'prorrog' ? S.params.expP1 : S.params.expP2) + ' dias']] };
+  }
+
+  if (/(lembr|anota|cobrar|avisar|ligar para|marcar de)/.test(t) && data){
+    return { tipo:'nota', texto: txt.trim(), data,
+      campos:[['Anotação', esc(txt.trim())], ['Para', fmtD(data)]] };
+  }
+  return null;
+}
+
+let PENDENTE = null;
+function confirmar(a){
+  PENDENTE = a;
+  const el = document.createElement('div');
+  el.className = 'as-msg ele';
+  el.innerHTML = `<div class="as-conf"><div class="as-ct">É isto que eu entendi?</div>
+    <dl>${a.campos.map(c => '<dt>' + c[0] + '</dt><dd>' + c[1] + '</dd>').join('')}</dl>
+    <div class="as-acoes"><button class="as-sim" id="as-sim">Confirmar e lançar</button>
+      <button class="as-nao" id="as-nao">Não é isso</button></div></div>`;
+  corpo().appendChild(el); corpo().scrollTop = corpo().scrollHeight;
+}
+
+function aplicar(){
+  const a = PENDENTE; PENDENTE = null;
+  if (!a) return;
+  if (a.tipo === 'etapa'){
+    if (!a.data){ diz('Falta o dia. Me diz, por exemplo: <i>"dia 20"</i>, <i>"sexta"</i> ou <i>"hoje"</i>.'); return; }
+    if (!Array.isArray(a.vaga.etapas)) a.vaga.etapas = [];
+    a.vaga.etapas[a.k] = a.data;
+    let novos = [];
+    try { novos = propagarVaga(a.vaga) || []; } catch (e) { /* segue */ }
+    marcarSujo(); render();
+    const c = calcVaga(a.vaga);
+    diz(`Lançado. <b>${esc(a.vaga.cargo || a.vaga.id)}</b> — ${esc(S.params.etapas[a.k].nome)}
+      em ${fmtD(a.data)}.<br><br>Última etapa concluída: <b>${esc(c.etapaNome)}</b>.
+      ${c.statusSla === 'FORA' ? 'Continua com <b>' + c.fora + ' etapa(s)</b> fora do prazo.'
+        : c.statusSla === 'DENTRO' ? 'A vaga está dentro do SLA.' : ''}
+      ${novos.length ? '<br><br>E <b>' + esc(novos[0]) + '</b> entrou na Admissão e nos controles seguintes.' : ''}`);
+  }
+  if (a.tipo === 'exp'){
+    a.pessoa[a.campo] = a.valor;
+    marcarSujo(); render();
+    diz(`Registrado: <b>${esc(a.pessoa.nome)}</b> —
+      ${a.campo === 'prorrog' ? 'prorrogação' : 'efetivação'}: ${a.valor}.`);
+  }
+  if (a.tipo === 'nota'){
+    S.notas.unshift({ id: proxId('notas','N'), texto: a.texto, idVaga:'',
+                      quando: a.data, feito:false, criada: iso(HOJE) });
+    marcarSujo(); render();
+    diz(`Anotado para <b>${fmtD(a.data)}</b>. Vai aparecer no Calendário e aqui na ordem do dia.`);
+  }
+}
+
+function responder(txt){
+  const t = sa(txt);
+  const r = PERGUNTAS.find(x => x.chaves.some(c => t.indexOf(sa(c)) >= 0));
+  if (r) return r.fn();
+  if (/ordem|hoje|prioridade|fazer|comec/.test(t)){
+    const p = prioridades();
+    return p.length ? p.slice(0, 5).map(linha).join('') : 'Não há nada pendente agora.';
+  }
+  return `Essa eu não sei responder. Eu faço conta sobre <b>prazo, SLA, experiência,
+    calendário e pendências</b> — o que está dentro do sistema.<br><br>
+    Para pergunta aberta, exporte a aba em CSV e leve ao Claude.`;
+}
+
+/* ------------------------------------------------------------- a janela */
+let aberto = false;
+function alternar(){
+  if (!pronto()) return;
+  aberto = !aberto;
+  $('as-painel').classList.toggle('aberto', aberto);
+  if (aberto && !corpo().childElementCount) ordemDoDia();
+  if (aberto) corpo().scrollTop = 0;
+}
+function enviar(){
+  const i = $('as-txt');
+  const t = (i.value || '').trim();
+  if (!t) return;
+  eu(t); i.value = '';
+  const acao = interpretar(t);
+  if (acao){ setTimeout(() => confirmar(acao), 200); return; }
+  setTimeout(() => diz(responder(t)), 200);
+}
+
+function montar(){
+  $('as-chips').innerHTML = PERGUNTAS
+    .map((p, i) => `<button class="as-chip" data-as-p="${i}">${p.chip}</button>`).join('');
+  $('btn-assist').addEventListener('click', alternar);
+  $('as-fechar').addEventListener('click', alternar);
+  $('as-enviar').addEventListener('click', enviar);
+  $('as-txt').addEventListener('keydown', ev => { if (ev.key === 'Enter') enviar(); });
+
+  document.addEventListener('click', ev => {
+    const c = ev.target.closest('.as-chip');
+    if (c){ const p = PERGUNTAS[+c.dataset.asP]; eu(p.chip); setTimeout(() => diz(p.fn()), 200); return; }
+    if (ev.target.id === 'as-sim'){ eu('Confirmo'); setTimeout(aplicar, 180); return; }
+    if (ev.target.id === 'as-nao'){
+      PENDENTE = null;
+      diz('Não gravei nada. Me diz de outro jeito — ou digite direto na célula da aba.');
+      return;
+    }
+    const ir = ev.target.closest('[data-as-ir]');
+    if (ir){ ui.tab = ir.dataset.asIr; render(); window.scrollTo(0, 0); alternar(); }
+  });
+
+  /* ditado do próprio navegador (Chrome). O áudio sai da máquina para virar
+     texto — por isso convém ditar vaga e dia, não nome e salário. */
+  const bv = $('as-voz');
+  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Rec){
+    bv.style.opacity = .4;
+    bv.title = 'Este navegador não tem ditado — use o Chrome';
+    bv.addEventListener('click', () => diz('Este navegador não tem ditado por voz. No Chrome o microfone funciona.'));
+  } else {
+    const r = new Rec();
+    r.lang = 'pt-BR'; r.interimResults = false; r.maxAlternatives = 1;
+    let ouvindo = false;
+    bv.addEventListener('click', () => { ouvindo ? r.stop() : r.start(); });
+    r.onstart = () => { ouvindo = true; bv.classList.add('ouvindo'); };
+    r.onend   = () => { ouvindo = false; bv.classList.remove('ouvindo'); };
+    r.onerror = () => { ouvindo = false; bv.classList.remove('ouvindo');
+      diz('Não consegui ouvir. Confira a permissão do microfone no navegador.'); };
+    r.onresult = ev => { $('as-txt').value = ev.results[0][0].transcript; enviar(); };
+  }
+
+  /* o botão só aparece depois que o conteúdo abriu, e traz o número de
+     atrasados — do mesmo jeito que a aba Calendário já faz */
+  setInterval(() => {
+    const b = $('btn-assist');
+    if (!b) return;
+    if (!pronto()){ b.hidden = true; return; }
+    b.hidden = false;
+    let n = 0;
+    try { n = prioridades().filter(x => x.atrasado).length; } catch (e) { n = 0; }
+    const alvo = 'Assistente' + (n ? '<span class="as-bolha">' + n + '</span>' : '');
+    if (b.innerHTML !== alvo) b.innerHTML = alvo;
+  }, 2000);
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', montar);
+else montar();
+
+})();
