@@ -310,6 +310,12 @@ select.cell{font-family:var(--fonte); font-size:11px; appearance:none;
 .bfill{position:absolute; left:0; top:50%; transform:translateY(-50%); height:13px}
 .bfill.good{background:var(--good)} .bfill.warn{background:var(--warn)} .bfill.crit{background:var(--crit)}
 .bfill.acc{background:var(--dado)}
+/* risco fino da meta, dentro da própria barra — evita um segundo eixo */
+.bmeta{position:absolute; top:50%; transform:translateY(-50%); width:2px; height:19px;
+  background:var(--ink-faint); opacity:.65}
+.bmeta i{position:absolute; left:5px; top:-1px; font-size:9px; letter-spacing:.06em;
+  color:var(--ink-faint); white-space:nowrap; font-style:normal}
+.bars.curto .brow{grid-template-columns:minmax(130px,.42fr) 1fr 62px}
 .bval{font-family:var(--fonte); font-size:11px; text-align:right; padding-right:9px;
   font-variant-numeric:tabular-nums}
 .bval.good{color:var(--good)} .bval.warn{color:var(--warn)} .bval.crit{color:var(--crit)}
@@ -1515,6 +1521,91 @@ function renderExperiencia(){
     <button class="sm" id="e-add">+ Novo colaborador</button>
     ${btnOrdemPadrao('experiencia')}
     <span class="count">${linhasOrd.length} de ${S.experiencia.length}</span></div>`;
+
+  /* ---- dash da aba: a leitura de gestão antes da planilha ----
+     Prorrogação e efetivação medem coisas diferentes: prorrogar é não ter
+     certeza aos 45 dias; efetivar é a decisão final. As duas juntas dizem
+     muito sobre a qualidade da contratação. */
+  const TE = S.experiencia.map(e => ({e, c: calcExp(e)}));
+  const emCurso = TE.filter(x => x.c.pendente && x.e.admissao);
+  const atrasadas = TE.filter(x => x.c.atrasada);
+  const vencendo = TE.filter(x => !x.c.atrasada &&
+      ((!x.e.prorrog && x.c.m1.k === 'warn') || (x.c.pendente && x.c.m2.k === 'warn')));
+  const decProrr = TE.filter(x => x.e.prorrog);
+  const prorrSim = decProrr.filter(x => x.e.prorrog === 'SIM').length;
+  const decEfet = TE.filter(x => x.e.efetiv);
+  const efetSim = decEfet.filter(x => x.e.efetiv === 'SIM').length;
+  const casa = emCurso.map(x => x.c.diasCasa).filter(x => x != null);
+  const cartao = (k, v, cls, n) => `<div class="readout"><span class="k">${k}</span>
+    <span class="v ${cls || ''}">${v}</span><span class="n">${n || ''}</span></div>`;
+
+  h += `<div class="readouts" style="margin-bottom:20px">
+    ${cartao('Em experiência', emCurso.length, '',
+      'de ' + S.experiencia.length + ' na base')}
+    ${cartao('Decisões atrasadas', atrasadas.length, atrasadas.length ? 'crit' : 'good',
+      atrasadas.length ? 'prazo da CLT já venceu' : 'nenhuma fora do prazo')}
+    ${cartao('Vencem em até 7 dias', vencendo.length, vencendo.length ? 'warn' : '',
+      'decidir esta semana')}
+    ${cartao('Taxa de prorrogação', decProrr.length ? pct(prorrSim / decProrr.length) : '—', '',
+      prorrSim + ' de ' + decProrr.length + ' decididas aos ' + P.expP1 + ' dias')}
+    ${cartao('Taxa de efetivação',
+      decEfet.length ? pct(efetSim / decEfet.length) : '—',
+      decEfet.length && efetSim / decEfet.length < 0.7 ? 'warn' : '',
+      efetSim + ' de ' + decEfet.length + ' encerradas')}
+    ${cartao('Tempo médio de casa', casa.length ? d1(avg(casa)) + '<span class="u">d</span>' : '—', '',
+      'de quem ainda está em experiência')}
+  </div>`;
+
+  /* ---- efetivação por empresa ----
+     Barra, não pizza: a pergunta é comparar unidades entre si, e pizza só
+     responde "quanto de um todo". A meta entra como risco dentro da barra,
+     para não precisar de um segundo eixo. */
+  const porEmp = {};
+  TE.forEach(x => {
+    const e = (x.e.empresa || '').trim();
+    if (!e || !x.e.efetiv) return;
+    const o = porEmp[e] || (porEmp[e] = {n: 0, sim: 0});
+    o.n++; if (x.e.efetiv === 'SIM') o.sim++;
+  });
+  const emps = Object.entries(porEmp).sort((a, b) => (b[1].sim / b[1].n) - (a[1].sim / a[1].n));
+  const meta = S.params.metaEfetivacao != null ? S.params.metaEfetivacao : 0.7;
+  if (emps.length){
+    h += `<div class="sec"><div class="sec-head"><h2>Efetivação por empresa</h2>
+      <span class="eyebrow src">meta ${pct(meta)} · só quem já teve decisão</span></div>
+      <div class="bars curto">` + emps.map(([e, o]) => {
+        const t = o.sim / o.n;
+        return `<div class="brow"><div class="blab">${esc(e)}
+            <span class="co">${o.sim} de ${o.n}</span></div>
+          <div class="btrack">
+            <div class="bfill acc" style="width:${(t * 100).toFixed(1)}%"></div>
+            <div class="bmeta" style="left:${(meta * 100).toFixed(1)}%"></div></div>
+          <div class="bval ${t < meta ? 't-warn' : 't-good'}">${pct(t)}</div></div>`;
+      }).join('') + `</div>
+      <div class="hint">O risco cinza em cada barra é a meta. Quem fica à esquerda dele
+        está efetivando menos do que o combinado.</div></div>`;
+  }
+
+  /* ---- efetivação mês a mês ----
+     O mês de cada decisão é o mês em que o prazo dos 90 dias caiu, não o da
+     admissão: é quando a decisão de fato teve de ser tomada. */
+  const mesesE = ultimosMeses(12);
+  const baldeE = {};
+  TE.forEach(x => {
+    if (!x.e.efetiv || !x.c.lim2) return;
+    const m = x.c.lim2.slice(0, 7);
+    const o = baldeE[m] || (baldeE[m] = {n: 0, sim: 0});
+    o.n++; if (x.e.efetiv === 'SIM') o.sim++;
+  });
+  const serieE = mesesE.map(m => baldeE[m] ? Math.round(baldeE[m].sim / baldeE[m].n * 100) : null);
+  const totE = Object.values(baldeE).reduce((a, o) => a + o.n, 0);
+  if (totE){
+    h += `<div class="sec"><div class="sec-head"><h2>Efetivação mês a mês</h2>
+      <span class="eyebrow src">% efetivado · ${totE} decisão(ões) em 12 meses</span></div>
+      ${colunas(mesesE, serieE, v => v + '%')}
+      <div class="hint">Mês vazio é mês sem decisão vencendo, não efetivação zero.
+        Com poucos meses lançados o desenho ainda diz pouco — ele fica útil conforme o histórico cresce.</div></div>`;
+  }
+
   h += `<div class="banner">Todo colaborador entra aqui, de qualquer empresa. Quando um processo chega a
     <b>100% na aba Admissão</b>, o colaborador aparece nesta lista sozinho${auto ? ` — <b>${auto}</b> ${auto>1?'vieram':'veio'} por esse caminho` : ''}.
     Data de admissão, nome, empresa, cargo e gestor <b>vêm da vaga</b>: corrigiu lá, corrige aqui sozinho.
@@ -1598,6 +1689,8 @@ function renderParametros(){
 
     <div class="pbox" style="margin-top:26px"><h3>Metas de gestão</h3>
       ${linha('Cumprimento de SLA','metaSla',P.metaSla,0.05)}
+      ${linha('Efetivação em ' + P.expP2 + ' dias','metaEfetivacao',
+              P.metaEfetivacao == null ? 0.7 : P.metaEfetivacao, 0.05)}
     </div>
 
     <div class="pbox" style="margin-top:26px"><h3>Sincronização entre pessoas</h3>
@@ -1781,6 +1874,30 @@ function corStatus(lk, v){
 const cStt = (i,f,v,lista,lk) =>
   `<select class="cell stt ${corStatus(lk, v)}" data-i="${i}" data-f="${f}" data-base="${lk}">${
     opts(lista, v)}<option value="__novo__">＋ cadastrar novo…</option></select>`;
+
+/* Os últimos doze meses, como rótulo AAAA-MM. Serve aos gráficos de
+   evolução das abas, do mesmo jeito que o Painel já faz. */
+function ultimosMeses(n){
+  const fora = [];
+  for (let i = n - 1; i >= 0; i--){
+    const d = new Date(HOJE.getFullYear(), HOJE.getMonth() - i, 1);
+    fora.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
+  }
+  return fora;
+}
+/* O desenho de colunas, em um lugar só: as duas abas usam o mesmo. */
+function colunas(meses, valores, rotulo){
+  const validos = valores.filter(v => v != null);
+  const topo = validos.length ? Math.max(...validos) : 0;
+  return `<div class="cols" style="grid-template-columns:repeat(${meses.length},1fr)">` +
+    valores.map((v, i) => `<div class="colb" title="${esc(meses[i])}${
+        v == null ? ' — sem dado' : ' — ' + rotulo(v)}">
+      <span class="cv">${v == null ? '' : rotulo(v)}</span>
+      <div class="fill" style="height:${v == null ? 0
+        : Math.max(topo ? v / topo * 100 : 0, 1.5).toFixed(1)}%"></div></div>`).join('') +
+    `</div><div class="col-labels" style="grid-template-columns:repeat(${meses.length},1fr)">` +
+    meses.map(m => `<span>${m.slice(5)}/${m.slice(2, 4)}</span>`).join('') + `</div>`;
+}
 
 /* ============================================================ MÓDULOS */
 function vagaPorId(id){ return S.vagas.find(v => v.id === id) || null; }
@@ -2058,7 +2175,18 @@ function renderContratos(){
     A linha nasce aqui sozinha quando uma vaga de <b>cargo de estágio</b> é fechada — de qualquer empresa.
     Cargo que não é de estágio não entra.</div>`;
 
+  const abertos = S.contratos.filter(k => k.nome && !k.assinado);
+  const semRetorno = abertos.filter(k => !k.retorno);
+  const atrasadosCiee = semRetorno.filter(k => calcContrato(k).sla.k === 'crit');
+  const aguardAssin = abertos.filter(k => k.retorno).length;
+
   h += `<div class="readouts" style="margin-bottom:20px">
+    <div class="readout"><span class="k">Contratos em aberto</span>
+      <span class="v">${abertos.length}</span>
+      <span class="n">${semRetorno.length} no CIEE · ${aguardAssin} para assinar</span></div>
+    <div class="readout"><span class="k">Atrasados no CIEE</span>
+      <span class="v ${atrasadosCiee.length ? 'crit' : 'good'}">${atrasadosCiee.length}</span>
+      <span class="n">${atrasadosCiee.length ? 'passaram do prazo de ' + sla + 'd úteis' : 'nenhum fora do prazo'}</span></div>
     <div class="readout"><span class="k">Retorno médio do CIEE</span>
       <span class="v ${avg(ret) > sla ? 'warn' : 'good'}">${d1(avg(ret))}<span class="u">d</span></span>
       <span class="n">dias úteis · meta ${sla} · n = ${ret.length}</span></div>
@@ -2072,6 +2200,45 @@ function renderContratos(){
       <span class="v">${d1(avg(S.contratos.map(k=>calcContrato(k).diasAssin).filter(x=>x!=null)))}<span class="u">d</span></span>
       <span class="n">do retorno até o contrato assinado</span></div>
   </div>`;
+
+  /* ---- retorno médio por instituição ----
+     Comparação de grandeza entre categorias: barra horizontal, uma cor só,
+     ordenada da pior para a melhor. O risco marca o prazo combinado. */
+  const barras = inst.map(([nome, o]) => ({nome, n: o.n, m: avg(o.retornos)}))
+    .filter(x => x.m != null).sort((a, b) => b.m - a.m);
+  if (barras.length){
+    const pior = Math.max(sla, ...barras.map(x => x.m));
+    h += `<div class="sec"><div class="sec-head"><h2>Retorno médio por instituição</h2>
+      <span class="eyebrow src">dias úteis da solicitação até o retorno · prazo ${sla}d</span></div>
+      <div class="bars curto">` + barras.map(x =>
+        `<div class="brow"><div class="blab">${esc(x.nome)}
+            <span class="co">${x.n} contrato${x.n > 1 ? 's' : ''}</span></div>
+          <div class="btrack">
+            <div class="bfill acc" style="width:${(x.m / pior * 100).toFixed(1)}%"></div>
+            <div class="bmeta" style="left:${(sla / pior * 100).toFixed(1)}%"></div></div>
+          <div class="bval ${x.m > sla ? 't-crit' : 't-good'}">${d1(x.m)}d</div></div>`).join('')
+      + `</div>
+      <div class="hint">O risco cinza é o prazo de ${sla} dias úteis. Barra que passa dele
+        é instituição que atrasa — é com ela que vale conversar.</div></div>`;
+  }
+
+  /* ---- o retorno está melhorando ou piorando? ---- */
+  const mesesK = ultimosMeses(12);
+  const baldeK = {};
+  S.contratos.forEach(k => {
+    const c = calcContrato(k);
+    if (!k.solic || c.diasRetorno == null) return;
+    (baldeK[k.solic.slice(0, 7)] || (baldeK[k.solic.slice(0, 7)] = [])).push(c.diasRetorno);
+  });
+  const serieK = mesesK.map(m => baldeK[m] ? avg(baldeK[m]) : null);
+  const totK = Object.values(baldeK).reduce((a, v) => a + v.length, 0);
+  if (totK){
+    h += `<div class="sec"><div class="sec-head"><h2>Retorno do CIEE mês a mês</h2>
+      <span class="eyebrow src">média de dias úteis · ${totK} contrato(s) com retorno · prazo ${sla}d</span></div>
+      ${colunas(mesesK, serieK, v => d1(v))}
+      <div class="hint">Coluna mais alta é mês que demorou mais. O mês entra pela data da
+        <b>solicitação</b>, para a demora aparecer no mês em que ela começou.</div></div>`;
+  }
 
   h += `<div class="grid-wrap"><table class="grid con"><thead>
     <tr><th class="grp a stG" colspan="3" style="left:0;width:${FX_LEFT._total}px">Identificação</th>
@@ -4624,7 +4791,7 @@ function sincLocal(){
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 15;
+const VERSAO_APP = 16;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
@@ -5060,6 +5227,7 @@ function normalizar(d, semente){
   S2.integracao.forEach(g => { if (g.idVaga === undefined) g.idVaga = ''; });
   if (S2.params.empresaIntegracao === undefined) S2.params.empresaIntegracao = 'FAGRON SERVICES';
   if (S2.params.slaCiee === undefined) S2.params.slaCiee = 2;
+  if (S2.params.metaEfetivacao === undefined) S2.params.metaEfetivacao = 0.7;
   S2.contratos.forEach(k => { if (k.idVaga === undefined) k.idVaga = ''; });
   S2.uniformes.forEach(u => {
     ['idVaga','vaga','telefone','cpf','cargo','setor','terceiro','sapato','camisa','calca','entregue','obs']
