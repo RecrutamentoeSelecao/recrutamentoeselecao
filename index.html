@@ -2349,6 +2349,24 @@ function renderFolhaUniformes(linhas){
   document.getElementById('p-uniformes').innerHTML = h;
 }
 
+/* Por que uma admissão não virou uniforme. Quatro motivos legítimos e um
+   jeito de cada um ficar visível — o que não aparece não se corrige. */
+function uniformesDeFora(){
+  const permitidas = S.params.empresasUniforme || [];
+  const fora = {semNome: [], outraEmpresa: [], semVaga: 0};
+  (S.admissao || []).forEach(a => {
+    if (!a.idVaga){ fora.semVaga++; return; }
+    if (S.uniformes.some(u => u.idVaga === a.idVaga)) return;
+    const c = calcAdm(a);
+    if (permitidas.length && !permitidas.some(e => mesmaEmpresa(e, c.empresa))){
+      fora.outraEmpresa.push((c.pessoa || a.idVaga) + (c.empresa ? ' (' + c.empresa + ')' : ' (sem empresa)'));
+      return;
+    }
+    if (!c.pessoa){ fora.semNome.push(a.idVaga); return; }
+  });
+  return fora;
+}
+
 function renderUniformes(){
   const L = S.listas;
   const TAM = L.tamanhos || ['PP','P','M','G','GG','XG'];
@@ -2394,6 +2412,22 @@ function renderUniformes(){
     Nascimento, telefone, CPF, calçado e tamanhos são preenchidos por você.
     Data de admissão, nome, empresa, função e setor <b>vêm da vaga</b>: corrigiu lá, corrige aqui sozinho.
     ${faltando ? `<br><b>${faltando}</b> ${faltando>1?'registros estão':'registro está'} sem algum tamanho.` : ''}</div>`;
+
+  /* Antes isto era silêncio: a admissão não virava uniforme e ninguém sabia
+     por quê. Agora a aba diz quantas e qual o motivo de cada uma. */
+  const df = uniformesDeFora();
+  const nf = df.semNome.length + df.outraEmpresa.length + df.semVaga;
+  if (nf){
+    h += `<div class="banner warn"><b>${nf} admissão(ões) não entraram nesta aba</b> —
+      e o motivo é um destes:
+      ${df.outraEmpresa.length ? `<br>• <b>${df.outraEmpresa.length}</b> de empresa fora da lista
+        (${esc(df.outraEmpresa.slice(0,3).join(', '))}${df.outraEmpresa.length>3 ? ' e mais…' : ''}).
+        Para incluir, acrescente a empresa em <b>Parâmetros → Uniformes</b>.` : ''}
+      ${df.semNome.length ? `<br>• <b>${df.semNome.length}</b> sem o nome do aprovado na vaga
+        (${esc(df.semNome.slice(0,3).join(', '))}). Preencha <b>Aprovado(a)</b> na aba Vagas.` : ''}
+      ${df.semVaga ? `<br>• <b>${df.semVaga}</b> ${df.semVaga>1?'lançadas':'lançada'} à mão na Admissão,
+        sem vaga de origem — essas não têm de onde puxar os dados.` : ''}</div>`;
+  }
 
   /* Esta aba é feita para ser fotografada inteira: nada de rolagem lateral.
      A tabela é proporcional, os títulos quebram em duas linhas e os campos
@@ -2599,6 +2633,11 @@ const EH_ESTAGIO = cargo => /ESTAGI/i.test(cargo || '');
 /* A Base ficou em caixa alta e os parâmetros guardavam a grafia antiga
    ("Fagron Services" vs "FAGRON SERVICES"), então nenhuma regra de empresa
    casava. Comparar sem caixa e sem acento resolve de vez. */
+/* Compara nome de empresa sem depender de acento, caixa ou espaço duplo.
+   Vivia no bloco de currículo; voltou para cá, perto de quem a usa. */
+function normal(s){
+  return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+}
 const mesmaEmpresa = (a, b) => normal(a) === normal(b);
 function sincronizarContratos(reg){
   const criados = [];
@@ -4809,7 +4848,7 @@ function sincLocal(){
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 18;
+const VERSAO_APP = 19;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
