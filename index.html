@@ -950,7 +950,48 @@ function ajustarEtapasVaga(v){
 }
 
 /* ============================================================ CÁLCULO */
-const ABERTO = st => st && st!=='FECHADA' && st!=='CANCELADA' && st!=='CONGELADA';
+/* ===== SITUAÇÃO DA VAGA =====
+   Uma definição só, em vez das três que viviam espalhadas pelo arquivo.
+   Duas situações são DECLARADAS — alguém decidiu, e não há data de onde
+   deduzi-las; as outras duas são CALCULADAS e, por isso, nunca ficam em
+   branco nem envelhecem. O declarado vence: vaga cancelada não "fecha" só
+   porque tinha uma aprovação lançada. */
+const SIT_DECLARADAS = ['CONGELADA', 'CANCELADA'];
+/* Valores que o antigo campo Status usava para dizer ETAPA — informação que a
+   régua de oito etapas já dá, pela data preenchida. Separados dos demais só
+   para o aviso da migração falar a verdade sobre cada um. */
+const STATUS_ERA_ETAPA = ['ABORDAGENS','TRIAR','TRIAGEM','PRIMEIRA ETAPA','SEGUNDA ETAPA',
+                          'FAZER PARECER','PARECER ENVIADO'];
+function dataAprovacao(v){
+  const n = (S.params.etapas || []).length;
+  return (n && Array.isArray(v.etapas)) ? (v.etapas[n - 1] || null) : null;
+}
+function situacaoVaga(v){
+  if (!v) return 'ABERTA';
+  if (SIT_DECLARADAS.includes(v.situacao)) return v.situacao;
+  return (dataAprovacao(v) && v.inicio) ? 'FECHADA' : 'ABERTA';
+}
+const ABERTA = v => situacaoVaga(v) === 'ABERTA';
+/* Dias que a vaga passou congelada em paradas ANTERIORES. A parada em curso
+   não entra aqui: ela é tratada parando o fim da contagem na data em que
+   congelou. Só ao descongelar o intervalo vira número e se soma. */
+const diasPausados = v => Math.max(0, Number(v && v.diasPausados) || 0);
+function congelar(v){
+  v.situacao = 'CONGELADA';
+  if (!v.congeladaEm) v.congeladaEm = iso(HOJE);
+  v.canceladaEm = null;
+}
+function descongelar(v, nova){
+  if (v.situacao === 'CONGELADA' && v.congeladaEm){
+    const parada = difD(v.congeladaEm, iso(HOJE));
+    if (parada > 0) v.diasPausados = diasPausados(v) + parada;
+  }
+  v.congeladaEm = null;
+  v.situacao = SIT_DECLARADAS.includes(nova) ? nova : '';
+  /* Cancelar também marca o dia: sem ele não se sabe quantos dias a vaga
+     levou para morrer, e o contador seguiria subindo para sempre. */
+  v.canceladaEm = v.situacao === 'CANCELADA' ? (v.canceladaEm || iso(HOJE)) : null;
+}
 
 function calcVaga(v){
   const P = S.params, slaTot = Math.max(...P.etapas.map(e=>e.sla));
@@ -961,14 +1002,24 @@ function calcVaga(v){
      da contratação — alimenta integração, experiência, contrato e uniforme —
      mas não entra no SLA nem no aging. */
   c.aprov    = v.etapas[nEt - 1] || null;
-  /* Aprovada é vaga encerrada: o aging para aqui, mesmo que o status ainda não
-     tenha sido mexido à mão. Mas ela só sai da lista "Em aberto" quando a data
-     de admissão também estiver preenchida — senão a linha some da tela bem na
-     hora em que falta justamente esse dado. */
-  c.encerrada = !!c.aprov || !ABERTO(v.status);
-  c.aberta   = ABERTO(v.status) && !(c.aprov && c.admissao);
   c.admissao = v.inicio || null;
-  c.dias     = v.abertura ? (c.aprov ? difD(v.abertura, c.aprov) : desdeHoje(v.abertura)) : null;
+  /* A situação manda, e ela própria já embute "aprovada e admitida".
+     ATENÇÃO à ordem: c.admissao tem de estar definido ANTES de ser lido —
+     antes da v20 ele era atribuído na linha seguinte à que o usava, valia
+     undefined, e a regra "só sai de Em aberto com a data de admissão"
+     estava escrita mas morta. */
+  c.sit       = situacaoVaga(v);
+  c.congelada = c.sit === 'CONGELADA';
+  c.pausados  = diasPausados(v);
+  c.encerrada = !!c.aprov || c.sit === 'FECHADA' || c.sit === 'CANCELADA';
+  c.aberta    = c.sit === 'ABERTA';
+  /* Onde a contagem para: na aprovação, ou no dia em que congelou, ou hoje.
+     Do total se descontam as paradas já encerradas. */
+  const fimConta = c.aprov
+    || ((c.congelada && v.congeladaEm) ? v.congeladaEm : null)
+    || ((c.sit === 'CANCELADA') ? (v.canceladaEm || 'CANCELADA_SEM_DATA') : null);
+  c.dias = (!v.abertura || fimConta === 'CANCELADA_SEM_DATA') ? null : Math.max(0,
+             (fimConta ? difD(v.abertura, fimConta) : desdeHoje(v.abertura)) - c.pausados);
   c.ttf      = (v.abertura && c.admissao) ? difD(v.abertura, c.admissao) : null;
   c.tth      = (v.etapas[1] && c.aprov) ? difD(v.etapas[1], c.aprov) : null;
 
@@ -978,19 +1029,37 @@ function calcVaga(v){
   c.etapaNome = ult < 0 ? 'Requisição aberta' : P.etapas[ult].nome;
 
   const marcos = [v.abertura, ...v.etapas].filter(Boolean).map(parseD);
-  c.diasEtapa = (!v.abertura || c.aprov) ? (c.aprov ? 0 : null)
-              : Math.round((HOJE - new Date(Math.max(...marcos))) / DIA);
+  const refEtapa = (c.congelada && v.congeladaEm) ? parseD(v.congeladaEm) : HOJE;
+  c.diasEtapa = (!v.abertura || c.aprov || c.sit === 'CANCELADA') ? (c.aprov ? 0 : null)
+              : Math.max(0, Math.round((refEtapa - new Date(Math.max(...marcos))) / DIA));
 
+  /* O prazo de cada etapa anda junto com a pausa: congelou cinco dias, todos
+     os limites correm cinco dias para frente. Senão descongelar entregaria a
+     vaga já atrasada por um tempo que não foi de ninguém. */
   c.flags = P.etapas.map((e, i) => {
-    if (!v.abertura || !v.medirSla) return '';
-    const lim = addD(v.abertura, e.sla);
-    if (!v.etapas[i]) return (iso(HOJE) > lim) ? 'ATRASADO' : 'PENDENTE';
+    /* Vaga cancelada não tem prazo descumprido: ela deixou de existir. Contar
+       suas etapas como atrasadas inflaria "fora do SLA" com vaga que ninguém
+       vai mais trabalhar. */
+    if (!v.abertura || !v.medirSla || c.sit === 'CANCELADA') return '';
+    const lim = addD(v.abertura, e.sla + c.pausados);
+    const ref = (c.congelada && v.congeladaEm) ? v.congeladaEm : iso(HOJE);
+    if (!v.etapas[i]) return (ref > lim) ? 'ATRASADO' : 'PENDENTE';
     return (v.etapas[i] <= lim) ? 'OK' : 'ATRASADO';
   });
   c.fora    = c.flags.filter(f=>f==='ATRASADO').length;
-  c.statusSla = (!v.abertura || !v.medirSla) ? '' : (c.fora===0 ? 'DENTRO' : 'FORA');
+  /* Cancelada fica FORA da medição, não "dentro dela": sem esta linha ela
+     entraria como prazo cumprido e melhoraria o indicador de graça. */
+  c.statusSla = (!v.abertura || !v.medirSla || c.sit === 'CANCELADA') ? ''
+              : (c.fora===0 ? 'DENTRO' : 'FORA');
 
-  if (c.dias == null) c.farol = '';
+  /* A ordem é a própria regra: cancelada sai na frente porque pode não ter
+     dias nenhum; e "aprovada sem data de admissão" ganha aviso próprio em vez
+     de se disfarçar de concluída — era justamente o caso que sumia da tela na
+     hora em que faltava o dado. */
+  if (c.sit === 'CANCELADA') c.farol = 'cancelada';
+  else if (c.dias == null) c.farol = '';
+  else if (c.congelada) c.farol = 'congelada';
+  else if (c.aprov && !c.admissao) c.farol = 'semadmissao';
   else if (c.encerrada) c.farol = 'concluida';
   else if (c.dias <= slaTot*P.agingVerde) c.farol = 'saudavel';
   else if (c.dias <= slaTot*P.agingAmarelo) c.farol = 'atencao';
@@ -1068,7 +1137,7 @@ function renderPainel(){
   h += abertas.length ? `<div class="bars">` + abertas.map(({v,c}) => {
       const k = c.farol==='critico'?'crit':c.farol==='atencao'?'warn':'good';
       return `<div class="brow">
-        <div class="blab"><span class="co">${esc(v.empresa)} · ${esc(v.status)}</span>${esc(v.cargo)||'<i>sem cargo</i>'}</div>
+        <div class="blab"><span class="co">${esc(v.empresa)} · ${esc(c.etapaNome)}</span>${esc(v.cargo)||'<i>sem cargo</i>'}</div>
         <div class="btrack sla" style="--slapos:${(slaTot/maxD*100).toFixed(1)}%">
           <div class="bfill ${k}" style="width:${(c.dias/maxD*100).toFixed(1)}%"></div></div>
         <div class="bval ${k}">${c.dias}d</div></div>`;
@@ -1294,13 +1363,13 @@ function renderDatalists(){
   const ordV = (a,b) => String(a.id).localeCompare(String(b.id),'pt-BR');
   const vagas = `<datalist id="dl-vagas">` + S.vagas.slice().sort(ordV).map(v =>
     `<option value="${v.id}">${esc([v.cargo, v.empresa].filter(Boolean).join(' · '))}</option>`).join('') + `</datalist>`;
-  const abertas = `<datalist id="dl-vagas-abertas">` + S.vagas.filter(v => ABERTO(v.status)).sort(ordV).map(v =>
+  const abertas = `<datalist id="dl-vagas-abertas">` + S.vagas.filter(ABERTA).sort(ordV).map(v =>
     `<option value="${v.id}">${esc([v.cargo, v.empresa].filter(Boolean).join(' · '))}</option>`).join('') + `</datalist>`;
   document.getElementById('datalists').innerHTML = listas + vagas + abertas;
 }
 
 const CHAVES_VAGAS = {
-  status:(r)=>r.v.status, empresa:(r)=>r.v.empresa, cargo:(r)=>r.v.cargo,
+  status:(r)=>r.c.sit, empresa:(r)=>r.v.empresa, cargo:(r)=>r.v.cargo,
   substituido:(r)=>r.v.substituido, aprovado:(r)=>r.v.aprovado, abertura:(r)=>r.v.abertura,
   dias:(r)=>r.c.dias, etapa:(r)=>r.c.etapaIdx, naetapa:(r)=>r.c.diasEtapa,
   sla:(r)=>r.c.fora, ttf:(r)=>r.c.ttf, inicio:(r)=>r.v.inicio, tipo:(r)=>r.v.tipo,
@@ -1310,6 +1379,7 @@ function vagasFiltradas(){
   const linhas = S.vagas.map((v,i) => ({v, i, c: calcVaga(v)})).filter(({v,c}) => {
     if (ui.vFiltro==='abertas' && !c.aberta) return false;
     if (ui.vFiltro==='criticas' && c.farol!=='critico') return false;
+    if (ui.vFiltro==='congeladas' && c.sit!=='CONGELADA') return false;
     if (ui.vFiltro==='fora' && c.statusSla!=='FORA') return false;
     if (!passaEmpresa('vagas', v.empresa)) return false;
     if (ui.vBusca){ const q=ui.vBusca.toLowerCase();
@@ -1319,13 +1389,60 @@ function vagasFiltradas(){
   return aplicarOrdem('vagas', linhas, CHAVES_VAGAS);
 }
 
+/* O que a migração da v20 preservou, dito em voz alta. Sai da tela sozinho
+   quando não houver mais nada guardado. */
+function avisoSituacao(){
+  const guardadas = S.vagas.filter(v => v.statusAntigo);
+  const semAprov = guardadas.filter(v => /FECHAD|CONCLU|ADMITID|CONTRATAD/i.test(v.statusAntigo));
+  const sobra = guardadas.filter(v => !semAprov.includes(v));
+  const eraEtapa = v => STATUS_ERA_ETAPA.includes(String(v.statusAntigo || '').toUpperCase().trim());
+  const grupos = {};
+  sobra.forEach(v => {
+    const k = v.statusAntigo;
+    if (!grupos[k]) grupos[k] = {n: 0, etapa: eraEtapa(v)};
+    grupos[k].n++;
+  });
+  const semData = S.vagas.filter(v => v.congelSuposta && situacaoVaga(v) === 'CONGELADA');
+  if (!guardadas.length && !semData.length) return '';
+  let h = `<div class="banner warn" style="margin-bottom:12px">`
+    + `<b>O campo Status virou Situação (v20).</b> `
+    + `A situação agora é calculada; só Congelada e Cancelada são marcadas por você. `
+    + `Nada do que estava escrito foi apagado:`;
+  if (semAprov.length) h += `<br>• <b>${semAprov.length} vaga(s) estavam marcadas como fechadas mas não têm `
+    + `Aprovação e Data de admissão preenchidas</b>, então voltaram a aparecer em aberto: `
+    + semAprov.map(v => esc(v.id)).join(', ')
+    + `. Preencha a data da etapa Aprovação e a Data de admissão, e elas fecham sozinhas.`;
+  Object.keys(grupos).sort().forEach(k => {
+    const g = grupos[k];
+    h += g.etapa
+      ? `<br>• <b>${g.n}</b> com o antigo status "${esc(k)}" — isso é etapa, e a régua já responde pela `
+        + `data preenchida. Pode limpar sem perder nada.`
+      : `<br>• <b>${g.n}</b> com o antigo status "${esc(k)}" — não é situação nem etapa, é recado. `
+        + `Guardado aqui até você decidir o que fazer com ele.`;
+  });
+  if (semData.length){
+    h += `<br>• <b>${semData.length} vaga(s) já estavam congeladas</b> e a versão antiga não guardava `
+      + `desde quando. Pus a data de hoje para não inventar número; informe a data real e o aging `
+      + `recalcula a pausa:`;
+    semData.forEach(v => {
+      h += `<br><span style="display:inline-flex;gap:6px;align-items:center;margin-top:4px">`
+        + `<b>${esc(v.id)}</b> ${esc((v.cargo || '').slice(0, 38))} `
+        + `<input type="date" data-congel="${esc(v.id)}" value="${esc(v.congeladaEm || '')}" `
+        + `style="min-height:28px;padding:2px 6px"></span>`;
+    });
+  }
+  if (guardadas.length)
+    h += `<br><button class="sm" id="sit-limpar" style="margin-top:8px">Já conferi — limpar os status antigos</button>`;
+  h += `</div>`;
+  return h;
+}
 function renderVagas(){
   const P = S.params, L = S.listas, linhas = vagasFiltradas();
   calcularFixas(linhas);
   let h = `<div class="toolbar">
     <div class="chips">
-      ${['abertas','criticas','fora','todas'].map(f => `<button class="chip-btn" data-vf="${f}"
-        aria-pressed="${ui.vFiltro===f}">${{abertas:'Em aberto',criticas:'Críticas',fora:'Fora do SLA',todas:'Todas'}[f]}</button>`).join('')}
+      ${['abertas','criticas','fora','congeladas','todas'].map(f => `<button class="chip-btn" data-vf="${f}"
+        aria-pressed="${ui.vFiltro===f}">${{abertas:'Em aberto',criticas:'Críticas',fora:'Fora do SLA',congeladas:'Congeladas',todas:'Todas'}[f]}</button>`).join('')}
     </div>
     ${selEmpresa('vagas','vagas','empresa')}
     <input type="search" id="v-busca" placeholder="Buscar cargo, empresa, candidato…" value="${esc(ui.vBusca)}">
@@ -1334,17 +1451,19 @@ function renderVagas(){
     <span class="count">${linhas.length} de ${S.vagas.length}</span>
   </div>`;
 
+  h += avisoSituacao();
+
   const CURTO = ['Alinhamento','Divulgação','Triagem CV RH','Triagem CV gestor',
                  'Entrevista RH','Parecer','Entrevista gestor','Aprovação'];
   const nEt = P.etapas.length;
   h += `<div class="grid-wrap"><table class="grid vag"><thead>
     <tr><th class="grp a stG" colspan="7" style="left:0;width:${FX_LEFT._total}px">Identificação</th><th class="grp a" colspan="1"></th>
-        <th class="grp c" colspan="5">Situação — automático</th>
+        <th class="grp c" colspan="5">Acompanhamento — automático</th>
         <th class="grp b" colspan="${nEt}">Data de conclusão de cada etapa</th>
         <th class="grp a" colspan="1">Resultado</th>
         <th class="grp d" colspan="7">Detalhes</th></tr>
     <tr>${thOrd('vagas','id','ID','fx',fxEstilo('id'))}
-        ${thOrd('vagas','status','Status','fx',fxEstilo('status'))}
+        ${thOrd('vagas','status','Situação','fx',fxEstilo('status'))}
         ${thOrd('vagas','empresa','Empresa','fx',fxEstilo('empresa'))}
         ${thOrd('vagas','cargo','Cargo','fx',fxEstilo('cargo'))}
         ${thOrd('vagas','substituido','Substituição','fx',fxEstilo('substituido'))}
@@ -1365,10 +1484,13 @@ function renderVagas(){
   if (!linhas.length) h += `<tr><td colspan="${nEt + 21}"><div class="empty">Nenhuma vaga com esses filtros.</div></td></tr>`;
 
   linhas.forEach(({v,i,c}) => {
-    const fk = {saudavel:'good', atencao:'warn', critico:'crit', concluida:'neut'}[c.farol] || 'neut';
-    const fl = {saudavel:'🟢 Saudável', atencao:'🟡 Atenção', critico:'🔴 Crítico', concluida:'⚪ Concluída'}[c.farol] || '—';
+    const fk = {saudavel:'good', atencao:'warn', critico:'crit', concluida:'neut',
+                congelada:'neut', cancelada:'neut', semadmissao:'warn'}[c.farol] || 'neut';
+    const fl = {saudavel:'🟢 Saudável', atencao:'🟡 Atenção', critico:'🔴 Crítico', concluida:'⚪ Concluída',
+                congelada:'⏸ Congelada', cancelada:'✕ Cancelada',
+                semadmissao:'🟡 Falta a data de admissão'}[c.farol] || '—';
     h += `<tr${autoriaAttr(v)}><td ${fx('id','idcell')}>${v.id}</td>
-      <td ${fx('status')}>${cStt(i,'status',v.status,L.statusVaga,'statusVaga')}</td>
+      <td ${fx('status')}>${cSitua(i,v)}</td>
       <td ${fx('empresa')}>${cBase(i,'empresa',v.empresa,'empresas')}</td>
       <td ${fx('cargo')}>${cBase(i,'cargo',v.cargo,'cargos')}</td>
       <td ${fx('substituido')}>${cWrap(i,'substituido',v.substituido)}</td>
@@ -1396,12 +1518,11 @@ function renderVagas(){
   });
   h += `</tbody></table></div>
     <div class="legenda">
-      <span class="lg-tit">Cor do status</span>
-      <span class="lg"><i class="stt t1"></i><i class="stt t2"></i><i class="stt t3"></i>
-        vaga andando — o cinza escurece conforme avança no funil</span>
-      <span class="lg"><i class="stt s-good"></i> fechada</span>
-      <span class="lg"><i class="stt s-warn"></i> parada esperando alguém</span>
-      <span class="lg"><i class="stt s-off"></i> congelada ou cancelada</span>
+      <span class="lg-tit">Situação</span>
+      <span class="lg"><i class="stt s-teal"></i> aberta — o sistema calcula</span>
+      <span class="lg"><i class="stt s-off"></i> fechada — tem Aprovação e Data de admissão</span>
+      <span class="lg"><i class="stt s-azul"></i> congelada — você marcou; o aging está parado</span>
+      <span class="lg"><i class="stt s-off"></i> cancelada — você marcou; fora dos indicadores</span>
     </div>
     <div class="banner" style="margin-top:14px"><b>Medir SLA</b> — as vagas trazidas do histórico vêm desmarcadas porque a planilha antiga não guardava a data de cada etapa; medi-las inflaria os atrasos. Toda vaga nova nasce marcada.</div>`
     + blocoAnotacoes();
@@ -1433,7 +1554,7 @@ function blocoAnotacoes(){
     if (a.quando && b.quando && a.quando !== b.quando) return a.quando < b.quando ? -1 : 1;
     return (b.criada || '').localeCompare(a.criada || '');
   };
-  const vagasAbertas = S.vagas.filter(v => ABERTO(v.status));
+  const vagasAbertas = S.vagas.filter(ABERTA);
   const opcoes = ['<option value="">sem vaga</option>'].concat(vagasAbertas.map(v =>
     `<option value="${v.id}">${v.id} · ${esc((v.cargo||'').slice(0,42))}</option>`)).join('');
 
@@ -1871,6 +1992,31 @@ function corStatus(lk, v){
   return mapa[v] || 's-off';
 }
 /* Célula editável que carrega a própria cor do status. */
+/* A célula da Situação. O que se escolhe é só a exceção — congelar ou
+   cancelar; "Normal" devolve a vaga ao cálculo e mostra entre parênteses o
+   que o cálculo deu. Guardar o valor calculado seria criar uma terceira
+   cópia da mesma verdade. */
+const SIT_ROTULO = {ABERTA:'🟢 Aberta', FECHADA:'⚪ Fechada',
+                    CONGELADA:'⏸ Congelada', CANCELADA:'✕ Cancelada'};
+function cSitua(i, v){
+  const calc = (dataAprovacao(v) && v.inicio) ? 'FECHADA' : 'ABERTA';
+  const sit = situacaoVaga(v);
+  const dica = sit === 'CONGELADA'
+    ? 'Congelada em ' + (v.congeladaEm ? fmtD(v.congeladaEm) : 'data não registrada')
+      + (diasPausados(v) ? ' · ' + diasPausados(v) + ' dia(s) já pausados antes' : '')
+      + '. O aging está parado.'
+    : sit === 'CANCELADA' ? ('Cancelada'
+        + (v.canceladaEm ? ' em ' + fmtD(v.canceladaEm) : ' (data não registrada: os dias ficam em branco)')
+        + '. Fora dos indicadores.')
+    : sit === 'FECHADA' ? 'Fechada pelo cálculo: tem Aprovação e Data de admissão.'
+    : 'Em aberto' + (diasPausados(v) ? ' · ' + diasPausados(v) + ' dia(s) pausados em congelamentos anteriores' : '');
+  const classe = {ABERTA:'s-teal', FECHADA:'s-off', CONGELADA:'s-azul', CANCELADA:'s-off'}[sit];
+  return `<select class="cell stt ${classe}" data-sit="${i}" title="${esc(dica)}">`
+    + `<option value=""${sit === calc ? ' selected' : ''}>${SIT_ROTULO[calc]} (automático)</option>`
+    + `<option value="CONGELADA"${sit === 'CONGELADA' ? ' selected' : ''}>${SIT_ROTULO.CONGELADA}</option>`
+    + `<option value="CANCELADA"${sit === 'CANCELADA' ? ' selected' : ''}>${SIT_ROTULO.CANCELADA}</option>`
+    + `</select>`;
+}
 const cStt = (i,f,v,lista,lk) =>
   `<select class="cell stt ${corStatus(lk, v)}" data-i="${i}" data-f="${f}" data-base="${lk}">${
     opts(lista, v)}<option value="__novo__">＋ cadastrar novo…</option></select>`;
@@ -2522,14 +2668,13 @@ function idxTarefaIntegracao(){
    data de início. Não existe "criar admissão na mão". */
 /* campos da vaga que mandam nas outras abas */
 const ESPELHADOS = ['inicio','aprovado','empresa','cargo','depto','gestor','tipo'];
-const VAGA_FECHADA = st => !!st && (/FECHAD|CONCLU|ADMITID|CONTRATAD/i.test(st)
-  || COR_STATUS_VAGA[st] === 's-good');
-/* Vaga aprovada é vaga que virou contratação. Preencheu a data da última etapa
-   (Aprovação) — ou fechou a vaga pelo status — e a admissão nasce sozinha. */
+/* Vaga aprovada é vaga que virou contratação, e isso se sabe por UMA coisa:
+   a data da última etapa (Aprovação). Até a v19 valia também "o status parece
+   fechado" — por texto ou, pior, porque a COR escolhida na Base era verde.
+   Uma escolha de enfeite criava pessoa na Admissão, na Integração e no
+   Uniforme. Saiu. */
 function vagaAprovada(v){
-  if (!v) return false;
-  const n = (S.params.etapas || []).length;
-  return !!(n && Array.isArray(v.etapas) && v.etapas[n - 1]) || VAGA_FECHADA(v.status);
+  return !!(v && dataAprovacao(v));
 }
 function sincronizarAdmissao(vaga){
   const alvos = vaga ? [vaga] : S.vagas;
@@ -2721,7 +2866,6 @@ const LISTAS_META = [
   {k:'cargos',        t:'Cargos',              usos:[['vagas','cargo'],['candidatos','cargo'],['experiencia','cargo'],['uniformes','cargo']]},
   {k:'gestores',      t:'Gestores',             usos:[['vagas','gestor'],['experiencia','gestor'],['integracao','gestor']]},
   {k:'departamentos', t:'Departamentos',       usos:[['vagas','depto'],['experiencia','depto'],['integracao','setor'],['uniformes','setor']]},
-  {k:'statusVaga',    t:'Status da vaga',      usos:[['vagas','status']]},
   {k:'tipoVaga',      t:'Tipo de vaga',        usos:[['vagas','tipo']]},
   {k:'statusCand',    t:'Status do candidato', usos:[['candidatos','status']]},
   {k:'fontes',        t:'Fonte do candidato',  usos:[['candidatos','fonte']]},
@@ -2851,7 +2995,7 @@ function compromissos(){
   /* vagas em aberto: a PRÓXIMA etapa não cumprida. Mostrar as dez de cada vaga
      encheria a tela de coisa que ainda não é da vez. */
   (S.vagas || []).forEach(v => {
-    if (!ABERTO(v.status) || !v.abertura) return;
+    if (!ABERTA(v) || !v.abertura) return;
     let k = -1;
     for (let i = 0; i < P.etapas.length; i++) if (!v.etapas[i]){ k = i; break; }
     if (k < 0) return;
@@ -3111,7 +3255,7 @@ const RENDER = {painel:renderPainel, calendario:renderCalendario, vagas:renderVa
   base:renderBase, parametros:renderParametros};
 
 function renderTabs(){
-  const abertas = S.vagas.filter(v => ABERTO(v.status)).length;
+  const abertas = S.vagas.filter(ABERTA).length;
   const atras = S.experiencia.filter(e => calcExp(e).atrasada).length;
   const integrPend = S.integracao.filter(g => calcIntegr(g).pendente).length;
   const admPend = S.admissao.filter(a => calcAdm(a).pct < 1).length;
@@ -3388,6 +3532,33 @@ document.addEventListener('change', ev => {
   if (t.dataset.sla !== undefined){
     S.vagas[+t.dataset.i].medirSla = t.checked; marcarSujo(); redesenhar(); return;
   }
+  /* Situação da vaga. Congelar marca o dia; descongelar fecha a conta da
+     parada e só então o tempo parado vira número. Toda a contabilidade da
+     pausa mora aqui — nenhuma outra tela precisa saber dela. */
+  if (t.dataset.congel !== undefined){
+    const v = S.vagas.find(x => x.id === t.dataset.congel);
+    if (v){
+      v.congeladaEm = t.value || null;
+      v.congelSuposta = false;      /* ela informou: não é mais suposição */
+      marcarSujo(); redesenharDepois(t);
+      toast('Congelamento em ' + (v.congeladaEm ? fmtD(v.congeladaEm) : 'sem data') + ' — aging recalculado');
+    }
+    return;
+  }
+  if (t.dataset.sit !== undefined){
+    const v = S.vagas[+t.dataset.sit], escolha = t.value;
+    const antes = situacaoVaga(v);
+    if (escolha === 'CONGELADA') congelar(v);
+    else descongelar(v, escolha);
+    marcarSujo();
+    const agora = situacaoVaga(v);
+    if (antes === 'CONGELADA' && agora !== 'CONGELADA' && diasPausados(v))
+      toast('Descongelada — ' + diasPausados(v) + ' dia(s) de pausa não contam no SLA');
+    else if (agora === 'CONGELADA') toast('Congelada em ' + fmtD(v.congeladaEm) + ' — o aging parou');
+    /* De propósito NÃO chama propagarVaga: desde a v20 quem cria admissão é a
+       data de Aprovação, não a situação da vaga. */
+    redesenhar(); return;
+  }
   const tb = t.closest('tbody');
   const col = (tb && tb.dataset.col) || colecaoAtual();
   if (!col) return;
@@ -3539,6 +3710,17 @@ document.addEventListener('click', async ev => {
     return;
   }
   if (t.dataset.tab){ ui.tab = t.dataset.tab; render(); return; }
+  if (t.id === 'sit-limpar'){
+    const n = S.vagas.filter(v => v.statusAntigo).length;
+    confirmar('Limpar o status antigo de ' + n + ' vaga(s)?',
+      'A situação calculada continua como está. Isso apaga só o texto guardado da versão anterior '
+      + '— e o aviso sai da tela.', 'Limpar').then(ok => {
+        if (!ok) return;
+        S.vagas.forEach(v => { v.statusAntigo = ''; });
+        marcarSujo(); redesenhar(); toast('Status antigos limpos');
+      });
+    return;
+  }
   if (t.dataset.vf){ ui.vFiltro = t.dataset.vf; renderVagas(); return; }
   if (t.dataset.ef){ ui.eFiltro = t.dataset.ef; renderExperiencia(); return; }
   if (t.dataset.af){ ui.aFiltro = t.dataset.af; renderAdmissao(); return; }
@@ -4022,12 +4204,12 @@ function tabelaCSV(){
          u.camisa, u.calca, u.entregue, fmtD(u.dataEntrega), u.obs, u.idVaga])]];
     default: return ['vagas',
       [['ID','Empresa','Cargo','Departamento','Tipo','Gestor','Salário','Abertura',
-        ...P.etapas.map(e => e.n+'. '+e.nome), 'Status','Candidato aprovado','Data de admissão',
+        ...P.etapas.map(e => e.n+'. '+e.nome), 'Situação','Candidato aprovado','Data de admissão',
         'Dias em aberto','Time to Fill','Time to Hire','Etapa atual','Dias na etapa','Aging',
         'Etapas fora do SLA','Status SLA','Medir SLA','Observações'],
        ...S.vagas.map(v => { const c = calcVaga(v);
          return [v.id, v.empresa, v.cargo, v.depto, v.tipo, v.gestor, v.salario, fmtD(v.abertura),
-           ...v.etapas.map(fmtD), v.status, v.aprovado, fmtD(v.inicio),
+           ...v.etapas.map(fmtD), c.sit, v.aprovado, fmtD(v.inicio),
            c.dias, c.ttf, c.tth, c.etapaNome, c.diasEtapa, c.farol, c.fora, c.statusSla,
            v.medirSla?'SIM':'NÃO', v.obs]; })]];
   }
@@ -4848,7 +5030,7 @@ function sincLocal(){
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 19;
+const VERSAO_APP = 20;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
@@ -5040,8 +5222,12 @@ function fundirParams(remotos){
   if (!remotos || !BASE_PARAMS) return 0;
   let n = 0;
   const reguaVelha = (remotos.etapasV || 0) < (S.params.etapasV || 0);
+  /* Mesma regra da régua: carimbo mais velho de outra pessoa não volta por
+     cima do mais novo, senão a migração se desfaz a cada sincronização. */
+  const sitVelha = (remotos.situacaoV || 0) < (S.params.situacaoV || 0);
   Object.keys(remotos).forEach(k => {
     if (reguaVelha && (k === 'etapas' || k === 'etapasV')) return;
+    if (sitVelha && k === 'situacaoV') return;
     const meu = JSON.stringify(S.params[k]);
     const partida = JSON.stringify(BASE_PARAMS[k]);
     const dela = JSON.stringify(remotos[k]);
@@ -5247,6 +5433,44 @@ function esquecerToken(){
    Aqui o que existe é preservado e só o que falta vem da semente. */
 const COLECOES = ['vagas','candidatos','experiencia','admissao','integracao','contratos',
                   'uniformes','notas'];
+/* ===== MIGRAÇÃO DO CAMPO STATUS PARA A SITUAÇÃO (v20) =====
+   A régua de etapas nos ensinou a nunca migrar por posição. Aqui é por NOME,
+   e com carimbo de versão próprio (params.situacaoV) para a migração saber
+   que já rodou.
+
+   O que o campo Status guardava era três coisas ao mesmo tempo: a etapa do
+   processo (que a régua já diz), a situação da vaga (que agora é calculada)
+   e recados do tipo AGUARDAR ou PRECISA ALINHAR, que não são nem uma nem
+   outra. Valor que não vira situação NÃO é jogado fora: fica em
+   v.statusAntigo, à vista na aba Vagas, até ela mesma limpar. */
+const SITUACAO_V = 1;
+function migrarSituacao(S2){
+  if ((S2.params.situacaoV || 0) >= SITUACAO_V) return;
+  const sem = x => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+  const nE = (S2.params.etapas || []).length;
+  (S2.vagas || []).forEach(v => {
+    const antigo = sem(v.status);
+    if (!antigo) return;
+    if (/CANCELAD/.test(antigo))      { v.situacao = 'CANCELADA'; }
+    else if (/CONGELAD/.test(antigo)) { v.situacao = 'CONGELADA';
+      /* Congelada de antes não tem data, e sem data a pausa não pausa. Entra
+         a data de hoje como provisória e a vaga fica MARCADA: o aviso pede a
+         data certa, porque chutar aqui infla o aging de quem está parado. */
+      if (!v.congeladaEm){ v.congeladaEm = iso(HOJE); v.congelSuposta = true; } }
+    else if (/FECHAD|CONCLU|ADMITID|CONTRATAD/.test(antigo)) {
+      /* fechada passa a ser conclusão do cálculo. Se faltar a data de
+         Aprovação ou a de admissão, a vaga volta a ABERTA — e é isso que o
+         aviso lista, uma por uma, em vez de deixar aparecer um bolo de
+         vermelho sem explicação. */
+      const aprov = (nE && Array.isArray(v.etapas)) ? v.etapas[nE - 1] : null;
+      if (!(aprov && v.inicio)) v.statusAntigo = v.status;
+    }
+    else { v.statusAntigo = v.status; }
+    v.status = '';
+  });
+  S2.params.situacaoV = SITUACAO_V;
+}
+
 function normalizar(d, semente){
   /* Carimbo de limpeza: quando a semente traz um carimbo diferente do que estava
      salvo, os registros salvos são descartados de propósito (foi um pedido de
@@ -5269,6 +5493,7 @@ function normalizar(d, semente){
   /* a versão da régua é a que ESTAVA salva, não a da semente — senão a
      migração nunca se reconhece como necessária */
   S2.params.etapasV = (d && d.params && d.params.etapasV) || 0;
+  S2.params.situacaoV = (d && d.params && d.params.situacaoV) || 0;
   migrarEtapas(S2, semente);
   S2.listas = Object.assign({}, semente.listas, (d && d.listas) || {});
   Object.keys(semente.listas).forEach(k => { if (!Array.isArray(S2.listas[k])) S2.listas[k] = semente.listas[k].slice(); });
@@ -5280,6 +5505,16 @@ function normalizar(d, semente){
     while (v.etapas.length < nE) v.etapas.push(null);
     v.etapas.length = nE;
   });
+  /* Campos da situação em vagas que nasceram antes da v20. */
+  S2.vagas.forEach(v => {
+    if (v.situacao === undefined)     v.situacao = '';
+    if (v.congelSuposta === undefined) v.congelSuposta = false;
+    if (v.congeladaEm === undefined)  v.congeladaEm = null;
+    if (v.canceladaEm === undefined)  v.canceladaEm = null;
+    if (v.diasPausados === undefined) v.diasPausados = 0;
+    if (v.statusAntigo === undefined) v.statusAntigo = '';
+  });
+  migrarSituacao(S2);
   S2.experiencia.forEach(e => { if (e.idVaga === undefined) e.idVaga = ''; });
   S2.integracao.forEach(g => { if (g.idVaga === undefined) g.idVaga = ''; });
   if (S2.params.empresaIntegracao === undefined) S2.params.empresaIntegracao = 'FAGRON SERVICES';
