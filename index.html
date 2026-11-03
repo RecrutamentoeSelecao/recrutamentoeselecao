@@ -3587,8 +3587,16 @@ document.addEventListener('change', ev => {
   const col = (tb && tb.dataset.col) || colecaoAtual();
   if (!col) return;
   if (t.dataset.et !== undefined){
-    S.vagas[+t.dataset.i].etapas[+t.dataset.et] = t.value || null;
-    marcarSujo(); redesenharDepois(t); return;
+    const vg = S.vagas[+t.dataset.i];
+    vg.etapas[+t.dataset.et] = t.value || null;
+    marcarSujo();
+    /* A data da Aprovação é o gatilho da contratação desde a v14 e, desde a
+       v20, o único. Preenchê-la aqui tem de criar a admissão na hora — era o
+       que já acontecia ao resolver a mesma etapa pelo Calendário, e não
+       acontecia pela tabela. */
+    const novos = propagarVaga(vg);
+    if (novos.length) toast(novos[0] + ' entrou na Admissão e nos controles seguintes');
+    redesenharDepois(t); return;
   }
   if (t.dataset.base !== undefined && t.value === '__novo__'){
     const obj = S[col][+t.dataset.i], f = t.dataset.f, lk = t.dataset.base;
@@ -5054,7 +5062,7 @@ function sincLocal(){
    o formato — aba nova, campo novo, coleção nova. É o que impede uma pessoa
    com a página velha de gravar por cima do que ela nem sabe que existe:
    uma versão antiga nunca escreve num arquivo gravado por versão mais nova. */
-const VERSAO_APP = 20;
+const VERSAO_APP = 21;
 let versaoRemota = 0;
 let usuariosRemotos = null;     /* a lista de pessoas do arquivo que acabou de ser lido */
 let desatualizado = false;
